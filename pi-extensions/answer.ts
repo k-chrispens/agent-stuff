@@ -11,7 +11,7 @@
  */
 
 import { complete, type Model, type Api, type UserMessage } from "@mariozechner/pi-ai";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { BorderedLoader } from "@mariozechner/pi-coding-agent";
 import {
 	type Component,
@@ -409,9 +409,7 @@ class QnAComponent implements Component {
 }
 
 export default function (pi: ExtensionAPI) {
-	pi.registerCommand("answer", {
-		description: "Extract questions from last assistant message into interactive Q&A",
-		handler: async (_args, ctx) => {
+	const answerHandler = async (ctx: ExtensionContext) => {
 			if (!ctx.hasUI) {
 				ctx.ui.notify("answer requires interactive mode", "error");
 				return;
@@ -521,6 +519,15 @@ export default function (pi: ExtensionAPI) {
 				},
 				{ triggerTurn: true },
 			);
-		},
+	};
+
+	pi.registerCommand("answer", {
+		description: "Extract questions from last assistant message into interactive Q&A",
+		handler: (_args, ctx) => answerHandler(ctx),
+	});
+
+	pi.registerShortcut("ctrl+.", {
+		description: "Extract and answer questions",
+		handler: answerHandler,
 	});
 }
