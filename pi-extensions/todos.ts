@@ -20,7 +20,9 @@ import {
 	Input,
 	Key,
 	Markdown,
+	SelectList,
 	Spacer,
+	type SelectItem,
 	Text,
 	TUI,
 	fuzzyMatch,
@@ -1455,23 +1457,81 @@ export default function todosExtension(pi: ExtensionAPI) {
 				const showActionMenu = async (todo: TodoFrontMatter | TodoRecord) => {
 					const record = "body" in todo ? todo : await resolveTodoRecord(todo);
 					if (!record) return;
-					const options = [
-						{ id: "refine", label: "refine - Refine task" },
-						{ id: "work", label: "work - Work on todo" },
-						{ id: "close", label: "close - Close todo" },
-						{ id: "reopen", label: "reopen - Reopen todo" },
-						{ id: "copy-path", label: "copy - Copy todo path into prompt" },
-						{ id: "delete", label: "delete - Delete todo" },
+					const options: SelectItem[] = [
+						{ value: "refine", label: "refine", description: "Refine task" },
+						{ value: "work", label: "work", description: "Work on todo" },
+						{ value: "close", label: "close", description: "Close todo" },
+						{ value: "reopen", label: "reopen", description: "Reopen todo" },
+						{ value: "copy-path", label: "copy", description: "Copy todo path into prompt" },
+						{ value: "delete", label: "delete", description: "Delete todo" },
 					];
 					const title = record.title || "(untitled)";
-					const selection = await ctx.ui.select(
-						`Actions for #${record.id} "${title}"`,
-						options.map((option) => option.label),
+					const selection = await ctx.ui.custom<TodoMenuAction | null>(
+						(overlayTui, overlayTheme, _overlayKb, overlayDone) => {
+							const container = new Container();
+							container.addChild(
+								new Text(
+									overlayTheme.fg(
+										"accent",
+										overlayTheme.bold(`Actions for #${record.id} "${title}"`),
+									),
+								),
+							);
+							container.addChild(new Spacer(1));
+
+							const selectList = new SelectList(options, options.length, {
+								selectedPrefix: (text) => overlayTheme.fg("accent", text),
+								selectedText: (text) => overlayTheme.fg("accent", text),
+								description: (text) => overlayTheme.fg("muted", text),
+								scrollInfo: (text) => overlayTheme.fg("dim", text),
+								noMatch: (text) => overlayTheme.fg("warning", text),
+							});
+
+							selectList.onSelect = (item) => overlayDone(item.value as TodoMenuAction);
+							selectList.onCancel = () => overlayDone(null);
+
+							container.addChild(selectList);
+							container.addChild(new Spacer(1));
+							container.addChild(
+								new Text(overlayTheme.fg("dim", "Press enter to confirm or esc to cancel")),
+							);
+
+							return {
+								render(width: number) {
+									const innerWidth = Math.max(10, width - 2);
+									const contentLines = container.render(innerWidth);
+									const borderColor = (text: string) => overlayTheme.fg("accent", text);
+									const top = borderColor(`┌${"─".repeat(innerWidth)}┐`);
+									const bottom = borderColor(`└${"─".repeat(innerWidth)}┘`);
+									const framed = contentLines.map((line) => {
+										const truncated = truncateToWidth(line, innerWidth);
+										const padding = Math.max(0, innerWidth - visibleWidth(truncated));
+										return (
+											borderColor("│") + truncated + " ".repeat(padding) + borderColor("│")
+										);
+									});
+									return [top, ...framed, bottom].map((line) => truncateToWidth(line, width));
+								},
+								invalidate() {
+									container.invalidate();
+								},
+								handleInput(data: string) {
+									selectList.handleInput(data);
+									overlayTui.requestRender();
+								},
+							};
+						},
+						{
+							overlay: true,
+							overlayOptions: { width: "70%", maxHeight: "60%", anchor: "center" },
+						},
 					);
-					if (!selection) return;
-					const selected = options.find((option) => option.label === selection);
-					if (!selected) return;
-					await applyTodoAction(record, selected.id as TodoMenuAction);
+
+					if (!selection) {
+						tui.requestRender();
+						return;
+					}
+					await applyTodoAction(record, selection);
 				};
 
 				const handleSelect = async (todo: TodoFrontMatter) => {
