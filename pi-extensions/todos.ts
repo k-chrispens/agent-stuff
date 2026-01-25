@@ -931,6 +931,14 @@ function formatTodoHeading(todo: TodoFrontMatter): string {
 	return `${formatTodoId(todo.id)} ${getTodoTitle(todo)}${tagText}`;
 }
 
+function buildRefinePrompt(todoId: string, title: string): string {
+	return (
+		`let's refine task ${formatTodoId(todoId)} "${title}": ` +
+		"Please rewrite the todo body with a thorough, structured description so an engineer or agent can work without extra investigation. " +
+		"Include: Context, Goals, Scope/Non-scope, Checklist, Acceptance Criteria, and Risks/Open questions.\n\n"
+	);
+}
+
 function splitTodosByStatus(todos: TodoFrontMatter[]): { openTodos: TodoFrontMatter[]; closedTodos: TodoFrontMatter[] } {
 	const openTodos: TodoFrontMatter[] = [];
 	const closedTodos: TodoFrontMatter[] = [];
@@ -1476,7 +1484,7 @@ export default function todosExtension(pi: ExtensionAPI) {
 					}
 					if (action === "refine") {
 						const title = record.title || "(untitled)";
-						nextPrompt = `let's refine task ${formatTodoId(record.id)} "${title}": `;
+						nextPrompt = buildRefinePrompt(record.id, title);
 						done();
 						return;
 					}
@@ -1627,7 +1635,7 @@ export default function todosExtension(pi: ExtensionAPI) {
 						const title = todo.title || "(untitled)";
 						nextPrompt =
 							action === "refine"
-								? `let's refine task ${formatTodoId(todo.id)} "${title}": `
+								? buildRefinePrompt(todo.id, title)
 								: `work on todo ${formatTodoId(todo.id)} "${title}"`;
 						done();
 					},
