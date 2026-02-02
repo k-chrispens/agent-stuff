@@ -1090,7 +1090,7 @@ Messages automatically include sender session info for replies. When you want a 
 				}),
 			),
 		}),
-		async execute(_toolCallId, params) {
+		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
 			const action = params.action ?? "send";
 			const sessionName = params.sessionName?.trim();
 			const sessionId = params.sessionId?.trim();
@@ -1440,7 +1440,7 @@ function registerListSessionsTool(pi: ExtensionAPI): void {
 		label: "List Sessions",
 		description: "List live sessions that expose a control socket (optionally with session names).",
 		parameters: Type.Object({}),
-		async execute() {
+		async execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
 			const sessions = await getLiveSessions();
 
 			if (sessions.length === 0) {

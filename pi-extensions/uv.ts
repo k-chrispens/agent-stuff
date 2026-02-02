@@ -33,10 +33,5 @@ export default function (pi: ExtensionAPI) {
     ctx.ui.notify("UV interceptor loaded", "info");
   });
 
-  pi.registerTool({
-    ...bashTool,
-    async execute(id, params, onUpdate, _ctx, signal) {
-      return bashTool.execute(id, params, signal, onUpdate);
-    },
-  });
+  pi.registerTool(bashTool);
 }

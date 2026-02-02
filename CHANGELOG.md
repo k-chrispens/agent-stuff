@@ -2,6 +2,10 @@
 
 All notable changes to agent-stuff are documented here.
 
+## Unreleased
+
+* Updated pi-extensions to use the new `ToolDefinition.execute` parameter order.
+
 ## 1.1.1
 
 * Removed the deprecated `qna` extension.
