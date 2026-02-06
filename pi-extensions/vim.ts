@@ -1,270 +1,189 @@
 /**
  * Vim Mode Extension
  *
- * Adds vim-style modal editing to the pi input editor.
- *
- * Modes:
- * - INSERT: default, all keys pass through to the editor
- * - NORMAL: navigation and editing via vim keybindings
- * - VISUAL: character-wise selection (not yet implemented)
+ * Minimal vim-style modal editing for the pi input editor,
+ * comparable to Claude Code's built-in vim setting.
+ * Toggle with `/vim` command.
  *
  * Normal mode bindings:
- *   Movement:    h j k l  w b e  0 $ ^  gg G  { }
- *   Editing:     i I a A o O  x X  dd D C  cc S  r  J  p
- *   Delete:      dw db d$ d0  diw
- *   Change:      cw cb c$ c0  ciw
- *   Yank:        yy yw yb y$ y0 yiw
- *   Undo:        u
- *   Search:      f F (single-char jump)
- *   Counts:      prefix any motion/action with a number
+ *   Movement:  h j k l  w b e  0 $ ^  gg G
+ *   Enter insert:  i I a A o O
+ *   Editing:  x dd D C cc/S r p u
+ *   Operators:  d/c/y + w/b/$/0
+ *   Yank:  yy
  *
- * Insert mode exits to normal via Escape.
- * In normal mode, Escape passes through (abort agent, etc).
+ * Insert mode: all keys pass through normally.
+ * Escape: insert→normal. In normal mode, passes through (abort agent, etc).
  *
- * Usage: pi -e ./pi-extensions/vim.ts
+ * Usage: pi -e ./pi-extensions/vim.ts, then /vim
  */
 
 import { CustomEditor, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 
-// Escape sequences for cursor/editing operations the base Editor understands
+// Key sequences matched by the Editor's keybinding system.
+// Only sequences that are NOT intercepted as app actions by CustomEditor.
 const SEQ = {
 	left: "\x1b[D",
 	right: "\x1b[C",
 	up: "\x1b[A",
 	down: "\x1b[B",
-	home: "\x01",      // ctrl+a — line start
-	end: "\x05",       // ctrl+e — line end
-	delete: "\x1b[3~", // forward delete
-	backspace: "\x7f",
-	wordBack: "\x1bb",  // alt+b
-	wordFwd: "\x1bf",   // alt+f
-	killLineEnd: "\x0b",   // ctrl+k — delete to end of line
-	killLineStart: "\x15", // ctrl+u — delete to start of line
-	killWordBack: "\x17",  // ctrl+w — delete word backwards
-	killWordFwd: "\x1bd",  // alt+d — delete word forward
-	newline: "\n",
-	undo: "\x1a",       // ctrl+z
-	yank: "\x19",       // ctrl+y — yank from kill ring
+	home: "\x01",        // ctrl+a — cursorLineStart
+	end: "\x05",         // ctrl+e — cursorLineEnd
+	delete: "\x1b[3~",   // delete — deleteCharForward
+	wordBack: "\x1bb",   // alt+b — cursorWordLeft
+	wordFwd: "\x1bf",    // alt+f — cursorWordRight
+	killLineEnd: "\x0b", // ctrl+k — deleteToLineEnd
+	undo: "\x1f",        // ctrl+- — undo (NOT ctrl+z which is suspend)
 } as const;
 
-type Mode = "normal" | "insert";
-type Pending = "d" | "c" | "y" | "f" | "F" | "r" | "g" | null;
+const WORD_RE = /\w/;
+
+type Pending = "d" | "c" | "y" | "g" | "r" | null;
 
 class VimEditor extends CustomEditor {
-	private mode: Mode = "insert";
+	private mode: "normal" | "insert" = "insert";
 	private pending: Pending = null;
-	private count = 0;
 	private register = "";
-
-	private getCount(): number {
-		const n = this.count || 1;
-		this.count = 0;
-		return n;
-	}
-
-	private resetPending() {
-		this.pending = null;
-		this.count = 0;
-	}
 
 	private emit(seq: string, n = 1) {
 		for (let i = 0; i < n; i++) super.handleInput(seq);
 	}
 
-	private get lines(): string[] { return this.getLines(); }
-	private get curLine(): string { return this.lines[this.getCursor().line] ?? ""; }
-	private get col(): number { return this.getCursor().col; }
-	private get line(): number { return this.getCursor().line; }
-
-	// ---- word boundary helpers ----
-
-	private isWordChar(c: string): boolean {
-		return /\w/.test(c);
+	private get curLine(): string {
+		return this.getLines()[this.getCursor().line] ?? "";
 	}
 
-	private wordEndForward(): number {
-		const line = this.curLine;
-		let i = this.col + 1;
-		while (i < line.length && !this.isWordChar(line[i]!)) i++;
-		while (i < line.length && this.isWordChar(line[i]!)) i++;
-		return i;
+	private get col(): number {
+		return this.getCursor().col;
 	}
 
-	private wordStartBackward(): number {
-		const line = this.curLine;
-		let i = this.col - 1;
-		while (i > 0 && !this.isWordChar(line[i]!)) i--;
-		while (i > 0 && this.isWordChar(line[i - 1]!)) i--;
-		return Math.max(0, i);
+	private get lineIdx(): number {
+		return this.getCursor().line;
 	}
 
-	private innerWordBounds(): [number, number] {
-		const line = this.curLine;
-		const c = this.col;
-		if (c >= line.length) return [c, c];
-		const isW = this.isWordChar(line[c]!);
-		let start = c, end = c;
-		if (isW) {
-			while (start > 0 && this.isWordChar(line[start - 1]!)) start--;
-			while (end < line.length && this.isWordChar(line[end]!)) end++;
-		} else {
-			while (start > 0 && !this.isWordChar(line[start - 1]!) && line[start - 1] !== " ") start--;
-			while (end < line.length && !this.isWordChar(line[end]!) && line[end] !== " ") end++;
-		}
-		return [start, end];
-	}
-
-	// ---- text manipulation via the editor's own methods ----
-
+	/** Delete a range on the current line, saving the removed text to the register. */
 	private deleteRange(from: number, to: number) {
 		if (from >= to) return;
-		const saved = this.curLine.slice(from, to);
-		this.register = saved;
-		// move to `from`, then forward-delete (to - from) chars
+		this.register = this.curLine.slice(from, to);
 		this.emit(SEQ.home);
 		this.emit(SEQ.right, from);
 		this.emit(SEQ.delete, to - from);
 	}
 
-	private yankRange(from: number, to: number) {
-		if (from >= to) return;
-		this.register = this.curLine.slice(from, to);
+	/** Delete from cursor to end of line, saving the removed text to the register. */
+	private deleteToEnd() {
+		if (this.col < this.curLine.length) {
+			this.register = this.curLine.slice(this.col);
+		}
+		this.emit(SEQ.killLineEnd);
 	}
 
-	// ---- operator dispatch ----
-
-	private applyOperator(op: "d" | "c" | "y", from: number, to: number) {
-		if (op === "y") {
-			this.yankRange(from, to);
-		} else {
-			this.deleteRange(from, to);
-			if (op === "c") this.mode = "insert";
+	/** Delete n full lines, saving them to the register as line-wise text. */
+	private deleteLines(n: number) {
+		const lines = this.getLines();
+		const idx = this.lineIdx;
+		const end = Math.min(idx + n, lines.length);
+		this.register = lines.slice(idx, end).join("\n") + "\n";
+		this.emit(SEQ.home);
+		for (let i = 0; i < n; i++) {
+			this.emit(SEQ.killLineEnd);
+			if (this.lineIdx < lines.length - 1 || i < n - 1) {
+				this.emit(SEQ.delete);
+			}
 		}
 	}
 
-	// ---- handle pending operator + motion ----
-
-	private handleOperatorMotion(motion: string) {
-		const op = this.pending as "d" | "c" | "y";
-		const n = this.getCount();
-		this.pending = null;
-
-		const c = this.col;
+	/** Find the position one past the end of the next word from cursor. */
+	private wordEnd(): number {
 		const line = this.curLine;
+		let i = this.col + 1;
+		while (i < line.length && !WORD_RE.test(line[i]!)) i++;
+		while (i < line.length && WORD_RE.test(line[i]!)) i++;
+		return Math.min(i, line.length);
+	}
+
+	/** Find the start position of the word before cursor. */
+	private wordStart(): number {
+		const line = this.curLine;
+		let i = this.col - 1;
+		while (i > 0 && !WORD_RE.test(line[i]!)) i--;
+		while (i > 0 && WORD_RE.test(line[i - 1]!)) i--;
+		return Math.max(0, i);
+	}
+
+	/** Execute an operator (d/c/y) with the given motion. */
+	private handleOperator(op: "d" | "c" | "y", motion: string) {
+		this.pending = null;
+		const c = this.col;
 
 		switch (motion) {
 			case "w": {
-				let end = c;
-				for (let i = 0; i < n; i++) {
-					let j = end + 1;
-					while (j < line.length && !this.isWordChar(line[j]!)) j++;
-					while (j < line.length && this.isWordChar(line[j]!)) j++;
-					end = j;
-				}
-				this.applyOperator(op, c, Math.min(end, line.length));
-				break;
-			}
-			case "b": {
-				let start = c;
-				for (let i = 0; i < n; i++) {
-					let j = start - 1;
-					while (j > 0 && !this.isWordChar(line[j]!)) j--;
-					while (j > 0 && this.isWordChar(line[j - 1]!)) j--;
-					start = Math.max(0, j);
-				}
-				this.applyOperator(op, start, c);
-				if (op !== "y") {
-					this.emit(SEQ.home);
-					this.emit(SEQ.right, start);
-				}
-				break;
-			}
-			case "$":
-				this.applyOperator(op, c, line.length);
-				break;
-			case "0":
-				this.applyOperator(op, 0, c);
-				if (op !== "y") {
-					this.emit(SEQ.home);
-				}
-				break;
-			case "d":
-			case "c":
-			case "y": {
-				// dd, cc, yy — operate on whole line(s)
-				const lines = this.lines;
-				const lineIdx = this.line;
+				const to = this.wordEnd();
 				if (op === "y") {
-					const endIdx = Math.min(lineIdx + n, lines.length);
-					this.register = lines.slice(lineIdx, endIdx).join("\n") + "\n";
+					this.register = this.curLine.slice(c, to);
 				} else {
-					// delete n lines: go to start, kill to end, then delete the newlines
-					this.emit(SEQ.home);
-					for (let i = 0; i < n; i++) {
-						this.emit(SEQ.killLineEnd);
-						// if not last line, delete the newline char too
-						if (this.line < lines.length - 1 || i < n - 1) {
-							this.emit(SEQ.delete);
-						}
-					}
+					this.deleteRange(c, to);
 					if (op === "c") this.mode = "insert";
 				}
 				break;
 			}
-			default:
+			case "b": {
+				const from = this.wordStart();
+				if (op === "y") {
+					this.register = this.curLine.slice(from, c);
+				} else {
+					this.deleteRange(from, c);
+					if (op === "c") this.mode = "insert";
+				}
 				break;
-		}
-	}
-
-	// ---- handle pending f/F (find char) ----
-
-	private handleFindChar(char: string) {
-		const direction = this.pending === "f" ? 1 : -1;
-		const n = this.getCount();
-		this.pending = null;
-		const line = this.curLine;
-		let pos = this.col;
-
-		for (let i = 0; i < n; i++) {
-			pos += direction;
-			while (pos >= 0 && pos < line.length && line[pos] !== char) pos += direction;
-			if (pos < 0 || pos >= line.length) return; // not found
-		}
-
-		const delta = pos - this.col;
-		if (delta > 0) this.emit(SEQ.right, delta);
-		else if (delta < 0) this.emit(SEQ.left, -delta);
-	}
-
-	// ---- inner word for di/ci/yi ----
-
-	private handleInnerWord(op: "d" | "c" | "y") {
-		const [start, end] = this.innerWordBounds();
-		this.applyOperator(op, start, end);
-		if (op !== "y") {
-			this.emit(SEQ.home);
-			this.emit(SEQ.right, start);
+			}
+			case "$": {
+				if (op === "y") {
+					this.register = this.curLine.slice(c);
+				} else {
+					this.deleteToEnd();
+					if (op === "c") this.mode = "insert";
+				}
+				break;
+			}
+			case "0": {
+				if (op === "y") {
+					this.register = this.curLine.slice(0, c);
+				} else {
+					this.deleteRange(0, c);
+					if (op === "c") this.mode = "insert";
+				}
+				break;
+			}
+			// dd, cc, yy
+			case "d": case "c": case "y": {
+				if (op === "y") {
+					this.register = (this.getLines()[this.lineIdx] ?? "") + "\n";
+				} else {
+					this.deleteLines(1);
+					if (op === "c") this.mode = "insert";
+				}
+				break;
+			}
 		}
 	}
 
 	handleInput(data: string): void {
-		// Escape: insert→normal, normal→pass through (abort agent etc)
 		if (matchesKey(data, "escape")) {
 			if (this.mode === "insert") {
 				this.mode = "normal";
-				this.resetPending();
+				this.pending = null;
 				return;
 			}
 			if (this.pending) {
-				this.resetPending();
+				this.pending = null;
 				return;
 			}
 			super.handleInput(data);
 			return;
 		}
 
-		// Insert mode: everything goes to the editor
 		if (this.mode === "insert") {
 			super.handleInput(data);
 			return;
@@ -272,221 +191,135 @@ class VimEditor extends CustomEditor {
 
 		// ---- NORMAL MODE ----
 
-		// Pending replace: next char replaces char under cursor
+		// Pending: replace char under cursor
 		if (this.pending === "r") {
 			this.pending = null;
 			if (data.length === 1 && data.charCodeAt(0) >= 32) {
 				this.emit(SEQ.delete);
-				super.handleInput(data);
+				this.insertTextAtCursor(data);
 				this.emit(SEQ.left);
 			}
 			return;
 		}
 
-		// Pending f/F: next char is the search target
-		if (this.pending === "f" || this.pending === "F") {
-			if (data.length === 1 && data.charCodeAt(0) >= 32) {
-				this.handleFindChar(data);
-			} else {
-				this.resetPending();
-			}
-			return;
-		}
-
-		// Pending g: waiting for second char
+		// Pending: gg
 		if (this.pending === "g") {
 			this.pending = null;
 			if (data === "g") {
-				// gg — go to first line
-				this.emit(SEQ.up, this.line);
+				this.emit(SEQ.up, this.lineIdx);
 				this.emit(SEQ.home);
 			}
-			this.count = 0;
 			return;
 		}
 
-		// Pending operator waiting for i (inner)
-		if ((this.pending === "d" || this.pending === "c" || this.pending === "y") && data === "i") {
-			// Next char determines the text object
-			// We'll handle 'w' for inner word — store a sub-pending
-			const op = this.pending;
-			this.pending = null;
-			// Wait for next char inline — but we can't do sub-pending easily,
-			// so just handle 'iw' as a special sequence by setting a flag
-			// Actually, let's just peek: the user types diw as d-i-w, and we get
-			// 'i' here. We need to wait for 'w'. Use a trick: temporarily set pending.
-			const self = this;
-			const origHandleInput = this.handleInput.bind(this);
-			this.handleInput = function (nextData: string) {
-				self.handleInput = origHandleInput;
-				if (nextData === "w") {
-					self.handleInnerWord(op);
-				}
-				self.count = 0;
-			};
-			return;
-		}
-
-		// Pending operator + motion
+		// Pending: operator awaiting motion
 		if (this.pending === "d" || this.pending === "c" || this.pending === "y") {
 			if ("wb$0".includes(data) || data === this.pending) {
-				this.handleOperatorMotion(data);
-				return;
+				this.handleOperator(this.pending, data);
+			} else {
+				this.pending = null;
 			}
-			// Unknown motion — cancel
-			this.resetPending();
 			return;
 		}
-
-		// Digit — accumulate count (0 without count = line start)
-		if (data >= "1" && data <= "9") {
-			this.count = this.count * 10 + parseInt(data);
-			return;
-		}
-		if (data === "0" && this.count > 0) {
-			this.count = this.count * 10;
-			return;
-		}
-
-		const n = this.getCount();
 
 		switch (data) {
 			// -- movement --
-			case "h": this.emit(SEQ.left, n); break;
-			case "j": this.emit(SEQ.down, n); break;
-			case "k": this.emit(SEQ.up, n); break;
-			case "l": this.emit(SEQ.right, n); break;
-			case "w": this.emit(SEQ.wordFwd, n); break;
-			case "b": this.emit(SEQ.wordBack, n); break;
-			case "e": {
-				// end of word: move forward by word then back one
-				for (let i = 0; i < n; i++) {
-					this.emit(SEQ.wordFwd);
-					this.emit(SEQ.left);
-				}
-				break;
-			}
+			case "h": this.emit(SEQ.left); break;
+			case "j": this.emit(SEQ.down); break;
+			case "k": this.emit(SEQ.up); break;
+			case "l": this.emit(SEQ.right); break;
+			case "w": this.emit(SEQ.wordFwd); break;
+			case "b": this.emit(SEQ.wordBack); break;
+			case "e": this.emit(SEQ.wordFwd); this.emit(SEQ.left); break;
 			case "0": this.emit(SEQ.home); break;
 			case "$": this.emit(SEQ.end); break;
 			case "^": {
 				this.emit(SEQ.home);
-				const line = this.curLine;
 				let i = 0;
+				const line = this.curLine;
 				while (i < line.length && line[i] === " ") i++;
 				if (i > 0) this.emit(SEQ.right, i);
 				break;
 			}
-			case "G": {
-				// go to last line
-				this.emit(SEQ.down, this.lines.length - 1 - this.line);
+			case "G":
+				this.emit(SEQ.down, this.getLines().length - 1 - this.lineIdx);
 				this.emit(SEQ.end);
 				break;
-			}
 			case "g":
 				this.pending = "g";
-				this.count = n; // preserve count for gg
 				break;
-			case "{": {
-				// paragraph up: find previous blank line
-				let target = this.line - 1;
-				while (target > 0 && this.lines[target]?.trim() !== "") target--;
-				if (target < this.line) this.emit(SEQ.up, this.line - target);
-				break;
-			}
-			case "}": {
-				// paragraph down: find next blank line
-				let target = this.line + 1;
-				while (target < this.lines.length && this.lines[target]?.trim() !== "") target++;
-				if (target > this.line) this.emit(SEQ.down, target - this.line);
-				break;
-			}
 
-			// -- mode switches --
+			// -- enter insert mode --
 			case "i": this.mode = "insert"; break;
-			case "I":
-				this.emit(SEQ.home);
-				this.mode = "insert";
-				break;
-			case "a":
-				this.emit(SEQ.right);
-				this.mode = "insert";
-				break;
-			case "A":
-				this.emit(SEQ.end);
-				this.mode = "insert";
-				break;
+			case "I": this.emit(SEQ.home); this.mode = "insert"; break;
+			case "a": this.emit(SEQ.right); this.mode = "insert"; break;
+			case "A": this.emit(SEQ.end); this.mode = "insert"; break;
 			case "o":
 				this.emit(SEQ.end);
-				super.handleInput(SEQ.newline);
+				this.insertTextAtCursor("\n");
 				this.mode = "insert";
 				break;
 			case "O":
 				this.emit(SEQ.home);
-				super.handleInput(SEQ.newline);
+				this.insertTextAtCursor("\n");
 				this.emit(SEQ.up);
 				this.mode = "insert";
 				break;
 
-			// -- single-key edits --
-			case "x": this.emit(SEQ.delete, n); break;
-			case "X": this.emit(SEQ.backspace, n); break;
-			case "D": this.emit(SEQ.killLineEnd); break;
+			// -- editing --
+			case "x": {
+				if (this.col < this.curLine.length) {
+					this.register = this.curLine[this.col]!;
+				}
+				this.emit(SEQ.delete);
+				break;
+			}
+			case "D":
+				this.deleteToEnd();
+				break;
 			case "C":
-				this.emit(SEQ.killLineEnd);
+				this.deleteToEnd();
 				this.mode = "insert";
 				break;
 			case "S":
 				this.emit(SEQ.home);
-				this.emit(SEQ.killLineEnd);
+				this.deleteToEnd();
 				this.mode = "insert";
 				break;
-			case "J": {
-				// join line below
-				if (this.line < this.lines.length - 1) {
-					this.emit(SEQ.end);
-					this.emit(SEQ.delete); // delete the newline
-					// ensure a space between joined content
-					const nextChar = this.curLine[this.col];
-					if (nextChar && nextChar !== " ") {
-						super.handleInput(" ");
-					}
-				}
-				break;
-			}
 			case "r":
 				this.pending = "r";
 				break;
-			case "p": {
-				// paste register after cursor
+			case "J":
+				if (this.lineIdx < this.getLines().length - 1) {
+					this.emit(SEQ.end);
+					this.emit(SEQ.delete);
+					if (this.curLine[this.col] && this.curLine[this.col] !== " ") {
+						this.insertTextAtCursor(" ");
+					}
+				}
+				break;
+			case "p":
 				if (this.register) {
 					if (this.register.endsWith("\n")) {
-						// line-wise paste: insert below
 						this.emit(SEQ.end);
-						super.handleInput(SEQ.newline);
-						const content = this.register.slice(0, -1);
-						for (const ch of content) super.handleInput(ch);
+						this.insertTextAtCursor("\n" + this.register.slice(0, -1));
 					} else {
 						this.emit(SEQ.right);
-						for (const ch of this.register) super.handleInput(ch);
+						this.insertTextAtCursor(this.register);
 						this.emit(SEQ.left);
 					}
 				}
 				break;
-			}
+			case "u":
+				this.emit(SEQ.undo);
+				break;
 
 			// -- operators --
-			case "d": this.pending = "d"; this.count = n; break;
-			case "c": this.pending = "c"; this.count = n; break;
-			case "y": this.pending = "y"; this.count = n; break;
+			case "d": this.pending = "d"; break;
+			case "c": this.pending = "c"; break;
+			case "y": this.pending = "y"; break;
 
-			// -- find --
-			case "f": this.pending = "f"; this.count = n; break;
-			case "F": this.pending = "F"; this.count = n; break;
-
-			// -- undo --
-			case "u": this.emit(SEQ.undo, n); break;
-
-			// -- pass control sequences through --
+			// -- pass control sequences through (ctrl+c, arrows, etc.) --
 			default:
 				if (data.length > 1 || data.charCodeAt(0) < 32) {
 					super.handleInput(data);
@@ -499,22 +332,32 @@ class VimEditor extends CustomEditor {
 		const lines = super.render(width);
 		if (lines.length === 0) return lines;
 
-		const modeStr = this.mode === "normal"
-			? (this.pending ? ` NORMAL (${this.pending}${this.count || ""}) ` : " NORMAL ")
+		const label = this.mode === "normal"
+			? (this.pending ? ` NORMAL (${this.pending}) ` : " NORMAL ")
 			: " INSERT ";
-
 		const last = lines.length - 1;
-		if (visibleWidth(lines[last]!) >= modeStr.length) {
-			lines[last] = truncateToWidth(lines[last]!, width - modeStr.length, "") + modeStr;
+		if (visibleWidth(lines[last]!) >= label.length) {
+			lines[last] = truncateToWidth(lines[last]!, width - label.length, "") + label;
 		}
 		return lines;
 	}
 }
 
 export default function (pi: ExtensionAPI) {
-	pi.on("session_start", (_event, ctx) => {
-		if (ctx.hasUI) {
-			ctx.ui.setEditorComponent((tui, theme, kb) => new VimEditor(tui, theme, kb));
-		}
+	let enabled = false;
+
+	pi.registerCommand("vim", {
+		description: "Toggle vim mode for the input editor",
+		handler: async (_args, ctx) => {
+			if (!ctx.hasUI) return;
+			enabled = !enabled;
+			if (enabled) {
+				ctx.ui.setEditorComponent((tui, theme, kb) => new VimEditor(tui, theme, kb));
+				ctx.ui.notify("Vim mode enabled", "info");
+			} else {
+				ctx.ui.setEditorComponent(undefined);
+				ctx.ui.notify("Vim mode disabled", "info");
+			}
+		},
 	});
 }

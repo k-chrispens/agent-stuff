@@ -98,8 +98,13 @@ fi
 for dir in intercepted-commands pixi-intercepted-commands; do
     target="$SCRIPT_DIR/$dir"
     if [ -d "$target" ]; then
-        chmod +x "$target"/*
-        echo "  chmod +x   $target/*"
+        shopt -s nullglob
+        files=("$target"/*)
+        shopt -u nullglob
+        if (( ${#files[@]} )); then
+            chmod +x "${files[@]}"
+            echo "  chmod +x   $target/*"
+        fi
     fi
 done
 
@@ -114,10 +119,16 @@ for p in "$PI_AGENT_DIR/extensions" "$PI_AGENT_DIR/skills" "$CLAUDE_DIR/CLAUDE.m
 done
 echo ""
 echo "Global extensions (auto-discovered):"
-ls "$PI_AGENT_DIR/extensions/"*.ts 2>/dev/null | while read -r f; do echo "  $(basename "$f")"; done
+for f in "$PI_AGENT_DIR/extensions/"*.ts; do
+    [ -e "$f" ] || continue
+    echo "  $(basename "$f")"
+done
 echo ""
 echo "Skills:"
-ls -d "$PI_AGENT_DIR/skills/"*/ 2>/dev/null | while read -r f; do echo "  $(basename "$f")"; done
+for f in "$PI_AGENT_DIR/skills/"*/; do
+    [ -d "$f" ] || continue
+    echo "  $(basename "$f")"
+done
 echo ""
 echo "Settings extensions:"
 if command -v jq &>/dev/null && [ -f "$PI_SETTINGS" ]; then
