@@ -1,0 +1,28 @@
+#!/bin/bash
+
+# Block pip and venv via python -m
+prev=""
+for arg in "$@"; do
+    if [ "$prev" = "-m" ]; then
+        case "$arg" in
+            pip)
+                echo "Error: 'python -m pip' is disabled. Use pixi instead:" >&2
+                echo "" >&2
+                echo "  To add a dependency:      pixi add PACKAGE" >&2
+                echo "  To add a PyPI dependency: pixi add --pypi PACKAGE" >&2
+                echo "" >&2
+                exit 1
+                ;;
+            venv)
+                echo "Error: 'python -m venv' is disabled. pixi manages environments." >&2
+                echo "" >&2
+                echo "  To activate the env: pixi shell" >&2
+                echo "" >&2
+                exit 1
+                ;;
+        esac
+    fi
+    prev="$arg"
+done
+
+exec pixi run python "$@"

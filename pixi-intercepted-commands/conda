@@ -1,0 +1,9 @@
+#!/bin/bash
+echo "Error: conda is disabled. Use pixi instead:" >&2
+echo "" >&2
+echo "  To add a conda dependency:  pixi add PACKAGE" >&2
+echo "  To add from a channel:      pixi add --channel CHANNEL PACKAGE" >&2
+echo "  To activate the env:        pixi shell" >&2
+echo "  To run a command:           pixi run COMMAND" >&2
+echo "" >&2
+exit 1

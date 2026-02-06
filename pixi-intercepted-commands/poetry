@@ -1,0 +1,10 @@
+#!/bin/bash
+echo "Error: poetry is disabled. Use pixi instead:" >&2
+echo "" >&2
+echo "  pixi init         instead of poetry init" >&2
+echo "  pixi add PKG      instead of poetry add PKG" >&2
+echo "  pixi install      instead of poetry install" >&2
+echo "  pixi run CMD      instead of poetry run CMD" >&2
+echo "  pixi shell        instead of poetry shell" >&2
+echo "" >&2
+exit 1

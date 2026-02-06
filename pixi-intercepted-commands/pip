@@ -1,0 +1,8 @@
+#!/bin/bash
+echo "Error: pip is disabled. Use pixi instead:" >&2
+echo "" >&2
+echo "  To add a dependency to the project: pixi add PACKAGE" >&2
+echo "  To add a PyPI dependency:           pixi add --pypi PACKAGE" >&2
+echo "  To run a command in the env:        pixi run COMMAND" >&2
+echo "" >&2
+exit 1
