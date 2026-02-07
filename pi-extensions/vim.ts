@@ -1,8 +1,7 @@
 /**
  * Vim Mode Extension
  *
- * Minimal vim-style modal editing for the pi input editor,
- * comparable to Claude Code's built-in vim setting.
+ * Minimal vim-style modal editing for the pi input editor.
  * Toggle with `/vim` command.
  *
  * Normal mode bindings:
@@ -21,33 +20,26 @@
 import { CustomEditor, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 
-// Key sequences matched by the Editor's keybinding system.
-// Only sequences that are NOT intercepted as app actions by CustomEditor.
-const SEQ = {
-	left: "\x1b[D",
-	right: "\x1b[C",
-	up: "\x1b[A",
-	down: "\x1b[B",
-	home: "\x01",        // ctrl+a — cursorLineStart
-	end: "\x05",         // ctrl+e — cursorLineEnd
-	delete: "\x1b[3~",   // delete — deleteCharForward
-	wordBack: "\x1bb",   // alt+b — cursorWordLeft
-	wordFwd: "\x1bf",    // alt+f — cursorWordRight
-	killLineEnd: "\x0b", // ctrl+k — deleteToLineEnd
-	undo: "\x1f",        // ctrl+- — undo (NOT ctrl+z which is suspend)
-} as const;
-
 const WORD_RE = /\w/;
 
 type Pending = "d" | "c" | "y" | "g" | "r" | null;
+
+/**
+ * Check if data is a control/special key sequence that should always
+ * pass through to CustomEditor for app-level handling (ctrl+c, ctrl+d, etc.).
+ */
+function isControlSequence(data: string): boolean {
+	return data.length > 1 || data.charCodeAt(0) < 32;
+}
 
 class VimEditor extends CustomEditor {
 	private mode: "normal" | "insert" = "insert";
 	private pending: Pending = null;
 	private register = "";
 
-	private emit(seq: string, n = 1) {
-		for (let i = 0; i < n; i++) super.handleInput(seq);
+	/** Emit a raw key sequence to the base Editor, bypassing CustomEditor keybindings. */
+	private emitRaw(seq: string, n = 1) {
+		for (let i = 0; i < n; i++) Editor_handleInput.call(this, seq);
 	}
 
 	private get curLine(): string {
@@ -66,9 +58,9 @@ class VimEditor extends CustomEditor {
 	private deleteRange(from: number, to: number) {
 		if (from >= to) return;
 		this.register = this.curLine.slice(from, to);
-		this.emit(SEQ.home);
-		this.emit(SEQ.right, from);
-		this.emit(SEQ.delete, to - from);
+		this.emitRaw("\x01"); // home
+		this.emitRaw("\x1b[C", from); // right
+		this.emitRaw("\x1b[3~", to - from); // delete
 	}
 
 	/** Delete from cursor to end of line, saving the removed text to the register. */
@@ -76,7 +68,7 @@ class VimEditor extends CustomEditor {
 		if (this.col < this.curLine.length) {
 			this.register = this.curLine.slice(this.col);
 		}
-		this.emit(SEQ.killLineEnd);
+		this.emitRaw("\x0b"); // ctrl+k = deleteToLineEnd
 	}
 
 	/** Delete n full lines, saving them to the register as line-wise text. */
@@ -85,11 +77,11 @@ class VimEditor extends CustomEditor {
 		const idx = this.lineIdx;
 		const end = Math.min(idx + n, lines.length);
 		this.register = lines.slice(idx, end).join("\n") + "\n";
-		this.emit(SEQ.home);
+		this.emitRaw("\x01"); // home
 		for (let i = 0; i < n; i++) {
-			this.emit(SEQ.killLineEnd);
+			this.emitRaw("\x0b"); // kill to end
 			if (this.lineIdx < lines.length - 1 || i < n - 1) {
-				this.emit(SEQ.delete);
+				this.emitRaw("\x1b[3~"); // delete (join lines)
 			}
 		}
 	}
@@ -157,7 +149,9 @@ class VimEditor extends CustomEditor {
 				break;
 			}
 			// dd, cc, yy
-			case "d": case "c": case "y": {
+			case "d":
+			case "c":
+			case "y": {
 				if (op === "y") {
 					this.register = (this.getLines()[this.lineIdx] ?? "") + "\n";
 				} else {
@@ -170,12 +164,14 @@ class VimEditor extends CustomEditor {
 	}
 
 	handleInput(data: string): void {
+		// Escape: switch to normal mode from insert, or pass through in normal
 		if (matchesKey(data, "escape")) {
 			if (this.mode === "insert") {
 				this.mode = "normal";
 				this.pending = null;
 				return;
 			}
+			// In normal mode, cancel pending or pass through for app handling (abort agent)
 			if (this.pending) {
 				this.pending = null;
 				return;
@@ -184,6 +180,7 @@ class VimEditor extends CustomEditor {
 			return;
 		}
 
+		// Insert mode: pass everything to CustomEditor
 		if (this.mode === "insert") {
 			super.handleInput(data);
 			return;
@@ -191,13 +188,24 @@ class VimEditor extends CustomEditor {
 
 		// ---- NORMAL MODE ----
 
+		// CRITICAL: Always pass control sequences through to CustomEditor for
+		// app-level handling (ctrl+c to clear, ctrl+d to exit, ctrl+z to suspend, etc.)
+		// This must happen regardless of pending state.
+		if (isControlSequence(data)) {
+			this.pending = null;
+			super.handleInput(data);
+			return;
+		}
+
+		// From here on, data is a single printable character.
+
 		// Pending: replace char under cursor
 		if (this.pending === "r") {
 			this.pending = null;
-			if (data.length === 1 && data.charCodeAt(0) >= 32) {
-				this.emit(SEQ.delete);
+			if (this.col < this.curLine.length) {
+				this.emitRaw("\x1b[3~"); // delete
 				this.insertTextAtCursor(data);
-				this.emit(SEQ.left);
+				this.emitRaw("\x1b[D"); // left
 			}
 			return;
 		}
@@ -206,8 +214,8 @@ class VimEditor extends CustomEditor {
 		if (this.pending === "g") {
 			this.pending = null;
 			if (data === "g") {
-				this.emit(SEQ.up, this.lineIdx);
-				this.emit(SEQ.home);
+				this.emitRaw("\x1b[A", this.lineIdx); // up
+				this.emitRaw("\x01"); // home
 			}
 			return;
 		}
@@ -224,26 +232,26 @@ class VimEditor extends CustomEditor {
 
 		switch (data) {
 			// -- movement --
-			case "h": this.emit(SEQ.left); break;
-			case "j": this.emit(SEQ.down); break;
-			case "k": this.emit(SEQ.up); break;
-			case "l": this.emit(SEQ.right); break;
-			case "w": this.emit(SEQ.wordFwd); break;
-			case "b": this.emit(SEQ.wordBack); break;
-			case "e": this.emit(SEQ.wordFwd); this.emit(SEQ.left); break;
-			case "0": this.emit(SEQ.home); break;
-			case "$": this.emit(SEQ.end); break;
+			case "h": this.emitRaw("\x1b[D"); break; // left
+			case "j": this.emitRaw("\x1b[B"); break; // down
+			case "k": this.emitRaw("\x1b[A"); break; // up
+			case "l": this.emitRaw("\x1b[C"); break; // right
+			case "w": this.emitRaw("\x1bf"); break; // word forward (alt+f)
+			case "b": this.emitRaw("\x1bb"); break; // word backward (alt+b)
+			case "e": this.emitRaw("\x1bf"); this.emitRaw("\x1b[D"); break; // word fwd + left
+			case "0": this.emitRaw("\x01"); break; // home (ctrl+a)
+			case "$": this.emitRaw("\x05"); break; // end (ctrl+e)
 			case "^": {
-				this.emit(SEQ.home);
+				this.emitRaw("\x01"); // home
 				let i = 0;
 				const line = this.curLine;
 				while (i < line.length && line[i] === " ") i++;
-				if (i > 0) this.emit(SEQ.right, i);
+				if (i > 0) this.emitRaw("\x1b[C", i); // right
 				break;
 			}
 			case "G":
-				this.emit(SEQ.down, this.getLines().length - 1 - this.lineIdx);
-				this.emit(SEQ.end);
+				this.emitRaw("\x1b[B", this.getLines().length - 1 - this.lineIdx); // down
+				this.emitRaw("\x05"); // end
 				break;
 			case "g":
 				this.pending = "g";
@@ -251,18 +259,18 @@ class VimEditor extends CustomEditor {
 
 			// -- enter insert mode --
 			case "i": this.mode = "insert"; break;
-			case "I": this.emit(SEQ.home); this.mode = "insert"; break;
-			case "a": this.emit(SEQ.right); this.mode = "insert"; break;
-			case "A": this.emit(SEQ.end); this.mode = "insert"; break;
+			case "I": this.emitRaw("\x01"); this.mode = "insert"; break; // home + insert
+			case "a": this.emitRaw("\x1b[C"); this.mode = "insert"; break; // right + insert
+			case "A": this.emitRaw("\x05"); this.mode = "insert"; break; // end + insert
 			case "o":
-				this.emit(SEQ.end);
+				this.emitRaw("\x05"); // end
 				this.insertTextAtCursor("\n");
 				this.mode = "insert";
 				break;
 			case "O":
-				this.emit(SEQ.home);
+				this.emitRaw("\x01"); // home
 				this.insertTextAtCursor("\n");
-				this.emit(SEQ.up);
+				this.emitRaw("\x1b[A"); // up
 				this.mode = "insert";
 				break;
 
@@ -271,7 +279,7 @@ class VimEditor extends CustomEditor {
 				if (this.col < this.curLine.length) {
 					this.register = this.curLine[this.col]!;
 				}
-				this.emit(SEQ.delete);
+				this.emitRaw("\x1b[3~"); // delete
 				break;
 			}
 			case "D":
@@ -282,7 +290,7 @@ class VimEditor extends CustomEditor {
 				this.mode = "insert";
 				break;
 			case "S":
-				this.emit(SEQ.home);
+				this.emitRaw("\x01"); // home
 				this.deleteToEnd();
 				this.mode = "insert";
 				break;
@@ -291,8 +299,8 @@ class VimEditor extends CustomEditor {
 				break;
 			case "J":
 				if (this.lineIdx < this.getLines().length - 1) {
-					this.emit(SEQ.end);
-					this.emit(SEQ.delete);
+					this.emitRaw("\x05"); // end
+					this.emitRaw("\x1b[3~"); // delete (join)
 					if (this.curLine[this.col] && this.curLine[this.col] !== " ") {
 						this.insertTextAtCursor(" ");
 					}
@@ -301,17 +309,17 @@ class VimEditor extends CustomEditor {
 			case "p":
 				if (this.register) {
 					if (this.register.endsWith("\n")) {
-						this.emit(SEQ.end);
+						this.emitRaw("\x05"); // end
 						this.insertTextAtCursor("\n" + this.register.slice(0, -1));
 					} else {
-						this.emit(SEQ.right);
+						this.emitRaw("\x1b[C"); // right
 						this.insertTextAtCursor(this.register);
-						this.emit(SEQ.left);
+						this.emitRaw("\x1b[D"); // left
 					}
 				}
 				break;
 			case "u":
-				this.emit(SEQ.undo);
+				this.emitRaw("\x1f"); // undo (ctrl+-)
 				break;
 
 			// -- operators --
@@ -319,11 +327,8 @@ class VimEditor extends CustomEditor {
 			case "c": this.pending = "c"; break;
 			case "y": this.pending = "y"; break;
 
-			// -- pass control sequences through (ctrl+c, arrows, etc.) --
+			// Ignore other printable chars in normal mode
 			default:
-				if (data.length > 1 || data.charCodeAt(0) < 32) {
-					super.handleInput(data);
-				}
 				break;
 		}
 	}
@@ -342,6 +347,10 @@ class VimEditor extends CustomEditor {
 		return lines;
 	}
 }
+
+// Cache the grandparent (Editor) handleInput for internal key emission,
+// bypassing CustomEditor's app-level keybinding checks.
+const Editor_handleInput = Object.getPrototypeOf(CustomEditor.prototype).handleInput;
 
 export default function (pi: ExtensionAPI) {
 	let enabled = false;
