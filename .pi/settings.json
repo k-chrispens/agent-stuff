@@ -1,12 +1,3 @@
 {
-  "extensions": [
-    "./pi-extensions/review.ts",
-    "./pi-extensions/files.ts",
-    "./pi-extensions/notify.ts",
-    "./pi-extensions/uv.ts",
-    "./pi-extensions/pixi.ts",
-    "./pi-extensions/loop.ts",
-    "./pi-extensions/vim.ts"
-  ],
   "enableSkillCommands": true
 }

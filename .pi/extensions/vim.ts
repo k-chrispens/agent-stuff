@@ -1,8 +1,11 @@
 /**
- * Vim Mode Extension
+ * Vim Mode Extension (with cwd history integration)
  *
  * Minimal vim-style modal editing for the pi input editor.
  * Toggle with `/vim` command.
+ *
+ * Also seeds the editor with prompt history from the current working directory
+ * (absorbs the functionality of cwd-history.ts to avoid setEditorComponent conflicts).
  *
  * Normal mode bindings:
  *   Movement:  h j k l  w b e  0 $ ^  gg G
@@ -12,13 +15,18 @@
  *   Yank:  yy
  *
  * Insert mode: all keys pass through normally.
- * Escape: insert→normal. In normal mode, passes through (abort agent, etc).
- *
- * Usage: pi -e ./pi-extensions/vim.ts, then /vim
+ * Escape/Ctrl+[: insert→normal. In normal mode, passes through (abort agent, etc).
  */
 
-import { CustomEditor, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { CustomEditor, type ExtensionAPI, type ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+import path from "node:path";
+import os from "node:os";
+import fs from "node:fs/promises";
+
+// =============================================================================
+// Vim editor
+// =============================================================================
 
 const WORD_RE = /\w/;
 
@@ -36,6 +44,33 @@ class VimEditor extends CustomEditor {
 	private mode: "normal" | "insert" = "insert";
 	private pending: Pending = null;
 	private register = "";
+
+	// Border color locking (from cwd-history)
+	private lockedBorder = false;
+	private _borderColor?: (text: string) => string;
+
+	constructor(
+		tui: ConstructorParameters<typeof CustomEditor>[0],
+		theme: ConstructorParameters<typeof CustomEditor>[1],
+		keybindings: ConstructorParameters<typeof CustomEditor>[2],
+	) {
+		super(tui, theme, keybindings);
+		// Set up border color locking so the app can't override our dynamic color
+		delete (this as { borderColor?: (text: string) => string }).borderColor;
+		Object.defineProperty(this, "borderColor", {
+			get: () => this._borderColor ?? ((text: string) => text),
+			set: (value: (text: string) => string) => {
+				if (this.lockedBorder) return;
+				this._borderColor = value;
+			},
+			configurable: true,
+			enumerable: true,
+		});
+	}
+
+	lockBorderColor() {
+		this.lockedBorder = true;
+	}
 
 	/** Emit a raw key sequence to the base Editor, bypassing CustomEditor keybindings. */
 	private emitRaw(seq: string, n = 1) {
@@ -163,9 +198,13 @@ class VimEditor extends CustomEditor {
 		}
 	}
 
+	private isEscape(data: string): boolean {
+		return matchesKey(data, "escape") || matchesKey(data, "ctrl+[");
+	}
+
 	handleInput(data: string): void {
-		// Escape: switch to normal mode from insert, or pass through in normal
-		if (matchesKey(data, "escape")) {
+		// Escape or Ctrl+[: switch to normal mode from insert, or pass through in normal
+		if (this.isEscape(data)) {
 			if (this.mode === "insert") {
 				this.mode = "normal";
 				this.pending = null;
@@ -352,20 +391,222 @@ class VimEditor extends CustomEditor {
 // bypassing CustomEditor's app-level keybinding checks.
 const Editor_handleInput = Object.getPrototypeOf(CustomEditor.prototype).handleInput;
 
+// =============================================================================
+// CWD history (absorbed from cwd-history.ts)
+// =============================================================================
+
+const MAX_HISTORY_ENTRIES = 100;
+const MAX_RECENT_PROMPTS = 30;
+
+interface PromptEntry {
+	text: string;
+	timestamp: number;
+}
+
+function extractText(content: Array<{ type: string; text?: string }>): string {
+	return content
+		.filter((item) => item.type === "text" && typeof item.text === "string")
+		.map((item) => item.text ?? "")
+		.join("")
+		.trim();
+}
+
+function collectUserPromptsFromEntries(entries: Array<any>): PromptEntry[] {
+	const prompts: PromptEntry[] = [];
+	for (const entry of entries) {
+		if (entry?.type !== "message") continue;
+		const message = entry?.message;
+		if (!message || message.role !== "user" || !Array.isArray(message.content)) continue;
+		const text = extractText(message.content);
+		if (!text) continue;
+		const timestamp = Number(message.timestamp ?? entry.timestamp ?? Date.now());
+		prompts.push({ text, timestamp });
+	}
+	return prompts;
+}
+
+function getSessionDirForCwd(cwd: string): string {
+	const safePath = `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+	return path.join(os.homedir(), ".pi", "agent", "sessions", safePath);
+}
+
+async function readTail(filePath: string, maxBytes = 256 * 1024): Promise<string> {
+	let fileHandle: fs.FileHandle | undefined;
+	try {
+		const stats = await fs.stat(filePath);
+		const size = stats.size;
+		const start = Math.max(0, size - maxBytes);
+		const length = size - start;
+		if (length <= 0) return "";
+		const buffer = Buffer.alloc(length);
+		fileHandle = await fs.open(filePath, "r");
+		const { bytesRead } = await fileHandle.read(buffer, 0, length, start);
+		if (bytesRead === 0) return "";
+		let chunk = buffer.subarray(0, bytesRead).toString("utf8");
+		if (start > 0) {
+			const firstNewline = chunk.indexOf("\n");
+			if (firstNewline !== -1) {
+				chunk = chunk.slice(firstNewline + 1);
+			}
+		}
+		return chunk;
+	} catch {
+		return "";
+	} finally {
+		await fileHandle?.close();
+	}
+}
+
+async function loadPromptHistoryForCwd(cwd: string, excludeSessionFile?: string): Promise<PromptEntry[]> {
+	const sessionDir = getSessionDirForCwd(path.resolve(cwd));
+	const resolvedExclude = excludeSessionFile ? path.resolve(excludeSessionFile) : undefined;
+	const prompts: PromptEntry[] = [];
+	let entries: fs.Dirent[] = [];
+	try {
+		entries = await fs.readdir(sessionDir, { withFileTypes: true });
+	} catch {
+		return prompts;
+	}
+	const files = await Promise.all(
+		entries
+			.filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
+			.map(async (entry) => {
+				const filePath = path.join(sessionDir, entry.name);
+				try {
+					const stats = await fs.stat(filePath);
+					return { filePath, mtimeMs: stats.mtimeMs };
+				} catch {
+					return undefined;
+				}
+			})
+	);
+	const sortedFiles = files
+		.filter((file): file is { filePath: string; mtimeMs: number } => Boolean(file))
+		.sort((a, b) => b.mtimeMs - a.mtimeMs);
+	for (const file of sortedFiles) {
+		if (resolvedExclude && path.resolve(file.filePath) === resolvedExclude) continue;
+		const tail = await readTail(file.filePath);
+		if (!tail) continue;
+		const lines = tail.split("\n").filter(Boolean);
+		for (const line of lines) {
+			let entry: any;
+			try {
+				entry = JSON.parse(line);
+			} catch {
+				continue;
+			}
+			if (entry?.type !== "message") continue;
+			const message = entry?.message;
+			if (!message || message.role !== "user" || !Array.isArray(message.content)) continue;
+			const text = extractText(message.content);
+			if (!text) continue;
+			const timestamp = Number(message.timestamp ?? entry.timestamp ?? Date.now());
+			prompts.push({ text, timestamp });
+			if (prompts.length >= MAX_RECENT_PROMPTS) break;
+		}
+		if (prompts.length >= MAX_RECENT_PROMPTS) break;
+	}
+	return prompts;
+}
+
+function buildHistoryList(currentSession: PromptEntry[], previousSessions: PromptEntry[]): PromptEntry[] {
+	const all = [...currentSession, ...previousSessions];
+	all.sort((a, b) => a.timestamp - b.timestamp);
+	const seen = new Set<string>();
+	const deduped: PromptEntry[] = [];
+	for (const prompt of all) {
+		const key = `${prompt.timestamp}:${prompt.text}`;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		deduped.push(prompt);
+	}
+	return deduped.slice(-MAX_HISTORY_ENTRIES);
+}
+
+function historiesMatch(a: PromptEntry[], b: PromptEntry[]): boolean {
+	if (a.length !== b.length) return false;
+	for (let i = 0; i < a.length; i += 1) {
+		if (a[i]?.text !== b[i]?.text || a[i]?.timestamp !== b[i]?.timestamp) return false;
+	}
+	return true;
+}
+
+// =============================================================================
+// Extension entry point
+// =============================================================================
+
+let loadCounter = 0;
+
+function installVimEditor(
+	pi: ExtensionAPI,
+	ctx: ExtensionContext,
+	history: PromptEntry[],
+) {
+	ctx.ui.setEditorComponent((tui, theme, keybindings) => {
+		const editor = new VimEditor(tui, theme, keybindings);
+		// Dynamic border color (bash mode / thinking level)
+		const borderColor = (text: string) => {
+			const isBashMode = editor.getText().trimStart().startsWith("!");
+			const colorFn = isBashMode
+				? ctx.ui.theme.getBashModeBorderColor()
+				: ctx.ui.theme.getThinkingBorderColor(pi.getThinkingLevel());
+			return colorFn(text);
+		};
+		editor.borderColor = borderColor;
+		editor.lockBorderColor();
+		for (const prompt of history) {
+			editor.addToHistory?.(prompt.text);
+		}
+		return editor;
+	});
+}
+
+function applyVimEditorWithHistory(pi: ExtensionAPI, ctx: ExtensionContext) {
+	if (!ctx.hasUI) return;
+
+	const sessionFile = ctx.sessionManager.getSessionFile();
+	const currentEntries = ctx.sessionManager.getBranch();
+	const currentPrompts = collectUserPromptsFromEntries(currentEntries);
+	const immediateHistory = buildHistoryList(currentPrompts, []);
+
+	const currentLoad = ++loadCounter;
+	const initialText = ctx.ui.getEditorText();
+	installVimEditor(pi, ctx, immediateHistory);
+
+	// Async: load history from other sessions in the same cwd
+	void (async () => {
+		const previousPrompts = await loadPromptHistoryForCwd(ctx.cwd, sessionFile ?? undefined);
+		if (currentLoad !== loadCounter) return;
+		if (ctx.ui.getEditorText() !== initialText) return;
+		const history = buildHistoryList(currentPrompts, previousPrompts);
+		if (historiesMatch(history, immediateHistory)) return;
+		installVimEditor(pi, ctx, history);
+	})();
+}
+
 export default function (pi: ExtensionAPI) {
-	let enabled = false;
+	let enabled = true;
+
+	pi.on("session_start", (_event, ctx) => {
+		if (enabled) applyVimEditorWithHistory(pi, ctx);
+	});
+
+	pi.on("session_switch", (_event, ctx) => {
+		if (enabled) applyVimEditorWithHistory(pi, ctx);
+	});
 
 	pi.registerCommand("vim", {
 		description: "Toggle vim mode for the input editor",
 		handler: async (_args, ctx) => {
 			if (!ctx.hasUI) return;
-			enabled = !enabled;
 			if (enabled) {
-				ctx.ui.setEditorComponent((tui, theme, kb) => new VimEditor(tui, theme, kb));
-				ctx.ui.notify("Vim mode enabled", "info");
-			} else {
+				enabled = false;
 				ctx.ui.setEditorComponent(undefined);
 				ctx.ui.notify("Vim mode disabled", "info");
+			} else {
+				enabled = true;
+				applyVimEditorWithHistory(pi, ctx);
+				ctx.ui.notify("Vim mode enabled", "info");
 			}
 		},
 	});
