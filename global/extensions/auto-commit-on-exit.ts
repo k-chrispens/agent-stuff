@@ -9,6 +9,10 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 export default function (pi: ExtensionAPI) {
 	pi.on("session_shutdown", async (_event, ctx) => {
+		// Check for opt-out marker
+		const { code: markerCode } = await pi.exec("test", ["-f", ".pi/no-auto-commit"]);
+		if (markerCode === 0) return;
+
 		// Check for uncommitted changes
 		const { stdout: status, code } = await pi.exec("git", ["status", "--porcelain"]);
 

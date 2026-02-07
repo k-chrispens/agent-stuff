@@ -49,15 +49,13 @@ link "$SCRIPT_DIR/skills" "$PI_AGENT_DIR/skills"
 # ---------------------------------------------------------------------------
 # ~/.pi/agent/settings.json — merge extensions, preserve everything else
 # ---------------------------------------------------------------------------
-AGENT_STUFF_EXTENSIONS=(
-    "$SCRIPT_DIR/pi-extensions/review.ts"
-    "$SCRIPT_DIR/pi-extensions/files.ts"
-    "$SCRIPT_DIR/pi-extensions/notify.ts"
-    "$SCRIPT_DIR/pi-extensions/uv.ts"
-    "$SCRIPT_DIR/pi-extensions/pixi.ts"
-    "$SCRIPT_DIR/pi-extensions/loop.ts"
-    "$SCRIPT_DIR/pi-extensions/vim.ts"
-)
+# Auto-discover all .ts extensions in .pi/extensions/
+AGENT_STUFF_EXTENSIONS=()
+shopt -s nullglob
+for ext in "$SCRIPT_DIR/.pi/extensions/"*.ts; do
+    AGENT_STUFF_EXTENSIONS+=("$ext")
+done
+shopt -u nullglob
 
 if command -v jq &>/dev/null; then
     if [ ! -f "$PI_SETTINGS" ]; then
@@ -69,8 +67,9 @@ if command -v jq &>/dev/null; then
         ext_json=$(echo "$ext_json" | jq --arg e "$ext" '. + [$e]')
     done
 
+    # Remove any existing extensions from this repo, then add current ones
     existing=$(jq -r '.extensions // []' "$PI_SETTINGS")
-    merged=$(echo "$existing" | jq --argjson new "$ext_json" '. + $new | unique')
+    merged=$(echo "$existing" | jq --arg repo "$SCRIPT_DIR" '[.[] | select(startswith($repo) | not)]' | jq --argjson new "$ext_json" '. + $new | unique')
 
     jq --argjson exts "$merged" '.extensions = $exts | .enableSkillCommands = true' \
         "$PI_SETTINGS" > "$PI_SETTINGS.tmp" && mv "$PI_SETTINGS.tmp" "$PI_SETTINGS"
