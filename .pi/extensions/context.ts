@@ -504,15 +504,21 @@ export default function contextExtension(pi: ExtensionAPI) {
 			const ctxWindow = usage?.contextWindow ?? 0;
 
 			// Tool definitions are not part of ctx.getContextUsage() (it estimates message tokens).
-			// We approximate their token impact from tool name + description, and apply a fudge
-			// factor to account for parameters/schema/formatting.
-			const TOOL_FUDGE = 1.5;
+			// We approximate their token impact from tool name + description + parameters.
+			// pi.getAllTools() now exposes parameter schemas, so we include them for a more
+			// accurate estimate. A small fudge factor accounts for schema formatting overhead.
+			const TOOL_FUDGE = 1.1;
 			const activeToolNames = pi.getActiveTools();
 			const toolInfoByName = new Map(pi.getAllTools().map((t) => [t.name, t] as const));
 			let toolsTokens = 0;
 			for (const name of activeToolNames) {
 				const info = toolInfoByName.get(name);
-				const blob = `${name}\n${info?.description ?? ""}`;
+				let blob = `${name}\n${info?.description ?? ""}`;
+				if ((info as any)?.parameters) {
+					try {
+						blob += `\n${JSON.stringify((info as any).parameters)}`;
+					} catch {}
+				}
 				toolsTokens += estimateTokens(blob);
 			}
 			toolsTokens = Math.round(toolsTokens * TOOL_FUDGE);
