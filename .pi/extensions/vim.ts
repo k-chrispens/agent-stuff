@@ -139,6 +139,25 @@ class VimEditor extends CustomEditor {
 		return Math.max(0, i);
 	}
 
+	/** Find the start position of the next word from cursor. */
+	private nextWordStart(): number {
+		const line = this.curLine;
+		let i = this.col;
+		if (i >= line.length) return i;
+		// Skip through current word characters
+		while (i < line.length && WORD_RE.test(line[i]!)) i++;
+		// Skip non-word characters (spaces, punctuation)
+		while (i < line.length && !WORD_RE.test(line[i]!)) i++;
+		return i;
+	}
+
+	/** In normal mode, clamp cursor so it doesn't go past the last character. */
+	private clampCursor(): void {
+		if (this.curLine.length > 0 && this.col >= this.curLine.length) {
+			this.emitRaw("\x1b[D"); // left
+		}
+	}
+
 	/** Execute an operator (d/c/y) with the given motion. */
 	private handleOperator(op: "d" | "c" | "y", motion: string) {
 		this.pending = null;
@@ -208,6 +227,7 @@ class VimEditor extends CustomEditor {
 			if (this.mode === "insert") {
 				this.mode = "normal";
 				this.pending = null;
+				this.clampCursor();
 				return;
 			}
 			// In normal mode, cancel pending or pass through for app handling (abort agent)
@@ -266,6 +286,7 @@ class VimEditor extends CustomEditor {
 			} else {
 				this.pending = null;
 			}
+			if (this.mode === "normal") this.clampCursor();
 			return;
 		}
 
@@ -274,10 +295,32 @@ class VimEditor extends CustomEditor {
 			case "h": this.emitRaw("\x1b[D"); break; // left
 			case "j": this.emitRaw("\x1b[B"); break; // down
 			case "k": this.emitRaw("\x1b[A"); break; // up
-			case "l": this.emitRaw("\x1b[C"); break; // right
-			case "w": this.emitRaw("\x1bf"); break; // word forward (alt+f)
-			case "b": this.emitRaw("\x1bb"); break; // word backward (alt+b)
-			case "e": this.emitRaw("\x1bf"); this.emitRaw("\x1b[D"); break; // word fwd + left
+			case "l": // right (guard: can't move past last character in normal mode)
+				if (this.col < this.curLine.length - 1) this.emitRaw("\x1b[C");
+				break;
+			case "w": { // next word start (uses WORD_RE, not terminal word-jump)
+				const target = this.nextWordStart();
+				const delta = target - this.col;
+				if (delta > 0) this.emitRaw("\x1b[C", delta);
+				break;
+			}
+			case "b": { // previous word start (uses WORD_RE, not terminal word-jump)
+				const target = this.wordStart();
+				const delta = this.col - target;
+				if (delta > 0) this.emitRaw("\x1b[D", delta);
+				break;
+			}
+			case "e": { // end of word (character-level scan with WORD_RE)
+				const line = this.curLine;
+				let i = this.col + 1;
+				while (i < line.length && !WORD_RE.test(line[i]!)) i++;
+				while (i < line.length && WORD_RE.test(line[i]!)) i++;
+				// i is one past end of word; land ON the last word char
+				const target = Math.min(i - 1, line.length - 1);
+				const delta = target - this.col;
+				if (delta > 0) this.emitRaw("\x1b[C", delta);
+				break;
+			}
 			case "0": this.emitRaw("\x01"); break; // home (ctrl+a)
 			case "$": this.emitRaw("\x05"); break; // end (ctrl+e)
 			case "^": {
@@ -338,9 +381,16 @@ class VimEditor extends CustomEditor {
 				break;
 			case "J":
 				if (this.lineIdx < this.getLines().length - 1) {
+					const nextLine = this.getLines()[this.lineIdx + 1] ?? "";
+					const leadingSpaces = nextLine.match(/^\s*/)?.[0]?.length ?? 0;
 					this.emitRaw("\x05"); // end
-					this.emitRaw("\x1b[3~"); // delete (join)
-					if (this.curLine[this.col] && this.curLine[this.col] !== " ") {
+					this.emitRaw("\x1b[3~"); // delete newline (join)
+					// Strip leading whitespace from the joined portion
+					if (leadingSpaces > 0) {
+						this.emitRaw("\x1b[3~", leadingSpaces);
+					}
+					// Ensure there's a space separator
+					if (this.col < this.curLine.length && this.curLine[this.col] !== " ") {
 						this.insertTextAtCursor(" ");
 					}
 				}
@@ -348,10 +398,33 @@ class VimEditor extends CustomEditor {
 			case "p":
 				if (this.register) {
 					if (this.register.endsWith("\n")) {
+						// Line-wise: paste below current line, move to start of pasted line
+						const pastedLines = this.register.slice(0, -1).split("\n");
 						this.emitRaw("\x05"); // end
 						this.insertTextAtCursor("\n" + this.register.slice(0, -1));
+						// Navigate back to first pasted line
+						if (pastedLines.length > 1) {
+							this.emitRaw("\x1b[A", pastedLines.length - 1);
+						}
+						this.emitRaw("\x01"); // home
 					} else {
 						this.emitRaw("\x1b[C"); // right
+						this.insertTextAtCursor(this.register);
+						this.emitRaw("\x1b[D"); // left
+					}
+				}
+				break;
+			case "P":
+				if (this.register) {
+					if (this.register.endsWith("\n")) {
+						// Line-wise: paste above current line, move to start of pasted line
+						const pastedLines = this.register.slice(0, -1).split("\n");
+						this.emitRaw("\x01"); // home
+						this.insertTextAtCursor(this.register.slice(0, -1) + "\n");
+						// Cursor is on the pushed-down original line; move up to first pasted line
+						this.emitRaw("\x1b[A", pastedLines.length);
+						this.emitRaw("\x01"); // home
+					} else {
 						this.insertTextAtCursor(this.register);
 						this.emitRaw("\x1b[D"); // left
 					}
@@ -369,6 +442,11 @@ class VimEditor extends CustomEditor {
 			// Ignore other printable chars in normal mode
 			default:
 				break;
+		}
+
+		// After any normal-mode command, ensure cursor doesn't go past the last character
+		if (this.mode === "normal") {
+			this.clampCursor();
 		}
 	}
 
@@ -447,6 +525,9 @@ async function readTail(filePath: string, maxBytes = 256 * 1024): Promise<string
 			const firstNewline = chunk.indexOf("\n");
 			if (firstNewline !== -1) {
 				chunk = chunk.slice(firstNewline + 1);
+			} else {
+				// Entire chunk is a partial line — not safe to parse
+				return "";
 			}
 		}
 		return chunk;

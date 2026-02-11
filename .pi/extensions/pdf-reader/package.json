@@ -1,0 +1,14 @@
+{
+  "name": "pi-pdf-reader",
+  "version": "1.0.0",
+  "description": "Pi extension to read PDF documents",
+  "dependencies": {
+    "pdfjs-dist": "^4.10.38",
+    "pngjs": "^7.0.0"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
