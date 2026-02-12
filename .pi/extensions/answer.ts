@@ -82,12 +82,14 @@ function parseExtractionResult(text: string): ExtractionResult | null {
 			jsonStr = jsonMatch[1].trim();
 		}
 
-		const parsed = JSON.parse(jsonStr);
+		const parsed = JSON.parse(jsonStr) as { questions?: unknown[] };
 		if (parsed && Array.isArray(parsed.questions)) {
 			return parsed as ExtractionResult;
 		}
 		return null;
-	} catch {
+	} catch (error: unknown) {
+		const message = error instanceof Error ? error.message : String(error);
+		process.stderr.write(`[answer] Failed to parse extraction result: ${message}\n`);
 		return null;
 	}
 }

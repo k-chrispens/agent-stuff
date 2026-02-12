@@ -187,7 +187,9 @@ async function loadProjectReviewGuidelines(cwd: string): Promise<string | null> 
 					const content = await fs.readFile(guidelinesPath, "utf8");
 					const trimmed = content.trim();
 					return trimmed ? trimmed : null;
-				} catch {
+				} catch (error: unknown) {
+					const message = error instanceof Error ? error.message : String(error);
+					process.stderr.write(`[review] Failed to read ${guidelinesPath}: ${message}\n`);
 					return null;
 				}
 			}
@@ -231,7 +233,9 @@ async function getMergeBase(
 		}
 
 		return null;
-	} catch {
+	} catch (error: unknown) {
+		const message = error instanceof Error ? error.message : String(error);
+		process.stderr.write(`[review] Failed to determine merge base for ${branch}: ${message}\n`);
 		return null;
 	}
 }
@@ -323,13 +327,16 @@ async function getPrInfo(pi: ExtensionAPI, prNumber: number): Promise<{ baseBran
 	if (code !== 0) return null;
 
 	try {
-		const data = JSON.parse(stdout);
+		const data = JSON.parse(stdout) as { baseRefName?: string; title?: string; headRefName?: string };
+		if (!data.baseRefName || !data.title || !data.headRefName) return null;
 		return {
 			baseBranch: data.baseRefName,
 			title: data.title,
 			headBranch: data.headRefName,
 		};
-	} catch {
+	} catch (error: unknown) {
+		const message = error instanceof Error ? error.message : String(error);
+		process.stderr.write(`[review] Failed to parse PR info: ${message}\n`);
 		return null;
 	}
 }

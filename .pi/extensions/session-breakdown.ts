@@ -220,6 +220,7 @@ async function walkSessionFiles(root: string, signal?: AbortSignal): Promise<str
 		try {
 			entries = await fs.readdir(dir, { withFileTypes: true });
 		} catch {
+			// Directory inaccessible (permissions, deleted) — skip it
 			continue;
 		}
 
@@ -260,6 +261,7 @@ async function parseSessionFile(filePath: string, signal?: AbortSignal): Promise
 			try {
 				obj = JSON.parse(line);
 			} catch {
+				// Malformed JSONL line — skip
 				continue;
 			}
 
@@ -619,7 +621,7 @@ async function computeBreakdown(signal?: AbortSignal): Promise<BreakdownData> {
 			if (localMidnight(approx) < start90) continue;
 			candidates.push(filePath);
 		} catch {
-			// ignore
+			// File may have been deleted between readdir and stat — skip
 		}
 	}
 

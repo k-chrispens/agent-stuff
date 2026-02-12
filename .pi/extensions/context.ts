@@ -8,7 +8,16 @@
  * - current context window usage + session totals (tokens/cost)
  */
 
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, ToolResultEvent } from "@mariozechner/pi-coding-agent";
+import type {
+	ExtensionAPI,
+	ExtensionCommandContext,
+	ExtensionContext,
+	ToolResultEvent,
+	SessionEntry,
+	CustomEntry,
+	SessionMessageEntry,
+} from "@mariozechner/pi-coding-agent";
+import { isReadToolResult } from "@mariozechner/pi-coding-agent";
 import { extractCostTotal } from "./lib/cost.ts";
 import { DynamicBorder } from "@mariozechner/pi-coding-agent";
 import { Container, Key, Text, matchesKey, type Component, type TUI } from "@mariozechner/pi-tui";
@@ -72,6 +81,7 @@ async function readFileIfExists(filePath: string): Promise<{ path: string; conte
 		const buf = await fs.readFile(filePath);
 		return { path: filePath, content: buf.toString("utf8"), bytes: buf.byteLength };
 	} catch {
+		// File may have been deleted or become unreadable — skip
 		return null;
 	}
 }
@@ -142,15 +152,23 @@ type SkillLoadedEntryData = {
 	path: string;
 };
 
+function isCustomEntry(e: SessionEntry): e is CustomEntry<unknown> {
+	return e.type === "custom";
+}
+
 function getLoadedSkillsFromSession(ctx: ExtensionContext): Set<string> {
 	const out = new Set<string>();
 	for (const e of ctx.sessionManager.getEntries()) {
-		if ((e as any)?.type !== "custom") continue;
-		if ((e as any)?.customType !== SKILL_LOADED_ENTRY) continue;
-		const data = (e as any)?.data as SkillLoadedEntryData | undefined;
+		if (!isCustomEntry(e)) continue;
+		if (e.customType !== SKILL_LOADED_ENTRY) continue;
+		const data = e.data as SkillLoadedEntryData | undefined;
 		if (data?.name) out.add(data.name);
 	}
 	return out;
+}
+
+function isMessageEntry(e: SessionEntry): e is SessionMessageEntry {
+	return e.type === "message";
 }
 
 function sumSessionUsage(ctx: ExtensionCommandContext): {
@@ -168,10 +186,10 @@ function sumSessionUsage(ctx: ExtensionCommandContext): {
 	let totalCost = 0;
 
 	for (const entry of ctx.sessionManager.getEntries()) {
-		if ((entry as any)?.type !== "message") continue;
-		const msg = (entry as any)?.message;
-		if (!msg || msg.role !== "assistant") continue;
-		const usage = msg.usage;
+		if (!isMessageEntry(entry)) continue;
+		const msg = entry.message;
+		if (!msg || !("role" in msg) || msg.role !== "assistant") continue;
+		const usage = (msg as { usage?: { inputTokens?: number; outputTokens?: number; cacheRead?: number; cacheWrite?: number; cost?: unknown } }).usage;
 		if (!usage) continue;
 		input += Number(usage.inputTokens ?? 0) || 0;
 		output += Number(usage.outputTokens ?? 0) || 0;
@@ -436,11 +454,10 @@ export default function contextExtension(pi: ExtensionAPI) {
 
 	pi.on("tool_result", (event: ToolResultEvent, ctx: ExtensionContext) => {
 		// Only count successful reads.
-		if ((event as any).toolName !== "read") return;
-		if ((event as any).isError) return;
+		if (!isReadToolResult(event)) return;
+		if (event.isError) return;
 
-		const input = (event as any).input as { path?: unknown } | undefined;
-		const p = typeof input?.path === "string" ? input.path : "";
+		const p = typeof event.input?.path === "string" ? event.input.path : "";
 		if (!p) return;
 
 		ensureCaches(ctx);
@@ -498,10 +515,14 @@ export default function contextExtension(pi: ExtensionAPI) {
 			for (const name of activeToolNames) {
 				const info = toolInfoByName.get(name);
 				let blob = `${name}\n${info?.description ?? ""}`;
-				if ((info as any)?.parameters) {
+				if (info?.parameters) {
 					try {
-						blob += `\n${JSON.stringify((info as any).parameters)}`;
-					} catch {}
+						blob += `\n${JSON.stringify(info.parameters)}`;
+					} catch (error: unknown) {
+						// JSON.stringify can throw on circular refs — skip parameter estimation
+						const message = error instanceof Error ? error.message : String(error);
+						process.stderr.write(`[context] Failed to serialize tool params for ${name}: ${message}\n`);
+					}
 				}
 				toolsTokens += estimateTokens(blob);
 			}

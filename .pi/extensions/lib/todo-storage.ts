@@ -198,6 +198,7 @@ export async function readTodoSettings(todosDir: string): Promise<TodoSettings> 
 		const raw = await fs.readFile(settingsPath, "utf8");
 		data = JSON.parse(raw) as Partial<TodoSettings>;
 	} catch {
+		// Settings file missing or malformed — use defaults
 		data = {};
 	}
 	return normalizeTodoSettings(data);
@@ -234,6 +235,7 @@ export function parseFrontMatter(text: string, idFallback: string): TodoFrontMat
 			data.tags = parsed.tags.filter((tag): tag is string => typeof tag === "string");
 		}
 	} catch {
+		// Malformed JSON front matter — return defaults
 		return data;
 	}
 
@@ -378,6 +380,7 @@ export async function readLockInfo(lockPath: string): Promise<LockInfo | null> {
 		const raw = await fs.readFile(lockPath, "utf8");
 		return JSON.parse(raw) as LockInfo;
 	} catch {
+		// Lock file missing, unreadable, or malformed — treat as unlocked
 		return null;
 	}
 }
@@ -406,12 +409,14 @@ export async function acquireLock(
 				try {
 					await fs.unlink(lockPath);
 				} catch {
-					// ignore
+					// Lock file already removed — benign race condition
 				}
 			};
-		} catch (error: any) {
-			if (error?.code !== "EEXIST") {
-				return { error: `Failed to acquire lock: ${error?.message ?? "unknown error"}` };
+		} catch (error: unknown) {
+			const isExist = error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "EEXIST";
+			if (!isExist) {
+				const message = error instanceof Error ? error.message : String(error);
+				return { error: `Failed to acquire lock: ${message}` };
 			}
 			const stats = await fs.stat(lockPath).catch(() => null);
 			const lockAge = stats ? now - stats.mtimeMs : LOCK_TTL_MS + 1;
@@ -461,6 +466,7 @@ export async function listTodos(todosDir: string): Promise<TodoFrontMatter[]> {
 	try {
 		entries = await fs.readdir(todosDir);
 	} catch {
+		// Todos dir doesn't exist — no todos
 		return [];
 	}
 
@@ -494,6 +500,7 @@ export function listTodosSync(todosDir: string): TodoFrontMatter[] {
 	try {
 		entries = readdirSync(todosDir);
 	} catch {
+		// Todos dir doesn't exist — no todos
 		return [];
 	}
 
@@ -533,6 +540,7 @@ export async function garbageCollectTodos(todosDir: string, settings: TodoSettin
 	try {
 		entries = await fs.readdir(todosDir);
 	} catch {
+		// Todos dir doesn't exist — nothing to GC
 		return;
 	}
 

@@ -42,97 +42,44 @@ import { StringEnum } from "@mariozechner/pi-ai";
 import { selectSmallModel } from "./lib/model-selection.ts";
 import { Box, Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
-import { promises as fs } from "node:fs";
 import * as net from "node:net";
-import * as os from "node:os";
-import * as path from "node:path";
+
+import type {
+	RpcCommand,
+	RpcSendCommand,
+	RpcSubscribeCommand,
+	SocketState,
+	ExtractedMessage,
+} from "./lib/control-types.ts";
+import {
+	CONTROL_DIR,
+	ensureControlDir,
+	getSocketPath,
+	isSafeSessionId,
+	removeSocket,
+	removeAliasesForSocket,
+	resolveSessionIdFromAlias,
+	syncAlias,
+	getLiveSessions,
+} from "./lib/control-socket.ts";
+import { writeResponse, writeEvent, parseCommand, sendRpcCommand } from "./lib/control-rpc.ts";
+import {
+	getLastAssistantMessage,
+	getMessagesSinceLastPrompt,
+	getFirstEntryId,
+	extractTextContent,
+	stripSenderInfo,
+	parseSenderInfo,
+	formatSenderInfo,
+} from "./lib/control-messages.ts";
 
 const CONTROL_FLAG = "session-control";
-const CONTROL_DIR = path.join(os.homedir(), ".pi", "session-control");
-const SOCKET_SUFFIX = ".sock";
 const SESSION_MESSAGE_TYPE = "session-message";
-const SENDER_INFO_PATTERN = /<sender_info>[\s\S]*?<\/sender_info>/g;
 
-// ============================================================================
-// RPC Types
-// ============================================================================
-
-interface RpcResponse {
-	type: "response";
-	command: string;
-	success: boolean;
-	error?: string;
-	data?: unknown;
-	id?: string;
-}
-
-interface RpcEvent {
-	type: "event";
-	event: string;
-	data?: unknown;
-	subscriptionId?: string;
-}
-
-// Unified command structure
-interface RpcSendCommand {
-	type: "send";
-	message: string;
-	mode?: "steer" | "follow_up";
-	id?: string;
-}
-
-interface RpcGetMessageCommand {
-	type: "get_message";
-	id?: string;
-}
-
-interface RpcGetSummaryCommand {
-	type: "get_summary";
-	id?: string;
-}
-
-interface RpcClearCommand {
-	type: "clear";
-	summarize?: boolean;
-	id?: string;
-}
-
-interface RpcAbortCommand {
-	type: "abort";
-	id?: string;
-}
-
-interface RpcSubscribeCommand {
-	type: "subscribe";
-	event: "turn_end";
-	id?: string;
-}
-
-type RpcCommand =
-	| RpcSendCommand
-	| RpcGetMessageCommand
-	| RpcGetSummaryCommand
-	| RpcClearCommand
-	| RpcAbortCommand
-	| RpcSubscribeCommand;
-
-// ============================================================================
-// Subscription Management
-// ============================================================================
-
-interface TurnEndSubscription {
-	socket: net.Socket;
-	subscriptionId: string;
-}
-
-interface SocketState {
-	server: net.Server | null;
-	socketPath: string | null;
-	context: ExtensionContext | null;
-	alias: string | null;
-	aliasTimer: ReturnType<typeof setInterval> | null;
-	turnEndSubscriptions: TurnEndSubscription[];
-}
+// Types imported from ./lib/control-types.ts
+// Socket utilities imported from ./lib/control-socket.ts
+// RPC utilities imported from ./lib/control-rpc.ts
+// Message utilities imported from ./lib/control-messages.ts
 
 // ============================================================================
 // Summarization
@@ -154,367 +101,6 @@ Be concise but comprehensive. Preserve exact file paths, function names, and err
 // ============================================================================
 
 const STATUS_KEY = "session-control";
-
-function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
-	return typeof error === "object" && error !== null && "code" in error;
-}
-
-function getSocketPath(sessionId: string): string {
-	return path.join(CONTROL_DIR, `${sessionId}${SOCKET_SUFFIX}`);
-}
-
-function isSafeSessionId(sessionId: string): boolean {
-	return !sessionId.includes("/") && !sessionId.includes("\\") && !sessionId.includes("..") && sessionId.length > 0;
-}
-
-function isSafeAlias(alias: string): boolean {
-	return !alias.includes("/") && !alias.includes("\\") && !alias.includes("..") && alias.length > 0;
-}
-
-function getAliasPath(alias: string): string {
-	return path.join(CONTROL_DIR, `${alias}.alias`);
-}
-
-function getSessionAlias(ctx: ExtensionContext): string | null {
-	const sessionName = ctx.sessionManager.getSessionName();
-	const alias = sessionName ? sessionName.trim() : "";
-	if (!alias || !isSafeAlias(alias)) return null;
-	return alias;
-}
-
-async function ensureControlDir(): Promise<void> {
-	await fs.mkdir(CONTROL_DIR, { recursive: true });
-}
-
-async function removeSocket(socketPath: string | null): Promise<void> {
-	if (!socketPath) return;
-	try {
-		await fs.unlink(socketPath);
-	} catch (error) {
-		if (isErrnoException(error) && error.code !== "ENOENT") {
-			throw error;
-		}
-	}
-}
-
-// TODO: add GC for stale sockets/aliases older than 7 days.
-async function removeAliasesForSocket(socketPath: string | null): Promise<void> {
-	if (!socketPath) return;
-	try {
-		const entries = await fs.readdir(CONTROL_DIR, { withFileTypes: true });
-		for (const entry of entries) {
-			if (!entry.isSymbolicLink()) continue;
-			const aliasPath = path.join(CONTROL_DIR, entry.name);
-			let target: string;
-			try {
-				target = await fs.readlink(aliasPath);
-			} catch {
-				continue;
-			}
-			const resolvedTarget = path.resolve(CONTROL_DIR, target);
-			if (resolvedTarget === socketPath) {
-				await fs.unlink(aliasPath);
-			}
-		}
-	} catch (error) {
-		if (isErrnoException(error) && error.code === "ENOENT") return;
-		throw error;
-	}
-}
-
-async function createAliasSymlink(sessionId: string, alias: string): Promise<void> {
-	if (!alias || !isSafeAlias(alias)) return;
-	const aliasPath = getAliasPath(alias);
-	const target = `${sessionId}${SOCKET_SUFFIX}`;
-	try {
-		await fs.unlink(aliasPath);
-	} catch (error) {
-		if (isErrnoException(error) && error.code !== "ENOENT") {
-			throw error;
-		}
-	}
-	try {
-		await fs.symlink(target, aliasPath);
-	} catch (error) {
-		if (isErrnoException(error) && error.code !== "EEXIST") {
-			throw error;
-		}
-	}
-}
-
-async function resolveSessionIdFromAlias(alias: string): Promise<string | null> {
-	if (!alias || !isSafeAlias(alias)) return null;
-	const aliasPath = getAliasPath(alias);
-	try {
-		const target = await fs.readlink(aliasPath);
-		const resolvedTarget = path.resolve(CONTROL_DIR, target);
-		const base = path.basename(resolvedTarget);
-		if (!base.endsWith(SOCKET_SUFFIX)) return null;
-		const sessionId = base.slice(0, -SOCKET_SUFFIX.length);
-		return isSafeSessionId(sessionId) ? sessionId : null;
-	} catch (error) {
-		if (isErrnoException(error) && error.code === "ENOENT") return null;
-		return null;
-	}
-}
-
-async function getAliasMap(): Promise<Map<string, string[]>> {
-	const aliasMap = new Map<string, string[]>();
-	const entries = await fs.readdir(CONTROL_DIR, { withFileTypes: true });
-	for (const entry of entries) {
-		if (!entry.isSymbolicLink()) continue;
-		if (!entry.name.endsWith(".alias")) continue;
-		const aliasPath = path.join(CONTROL_DIR, entry.name);
-		let target: string;
-		try {
-			target = await fs.readlink(aliasPath);
-		} catch {
-			continue;
-		}
-		const resolvedTarget = path.resolve(CONTROL_DIR, target);
-		const aliases = aliasMap.get(resolvedTarget);
-		const aliasName = entry.name.slice(0, -".alias".length);
-		if (aliases) {
-			aliases.push(aliasName);
-		} else {
-			aliasMap.set(resolvedTarget, [aliasName]);
-		}
-	}
-	return aliasMap;
-}
-
-async function isSocketAlive(socketPath: string): Promise<boolean> {
-	return await new Promise((resolve) => {
-		const socket = net.createConnection(socketPath);
-		const timeout = setTimeout(() => {
-			socket.destroy();
-			resolve(false);
-		}, 300);
-
-		const cleanup = (alive: boolean) => {
-			clearTimeout(timeout);
-			socket.removeAllListeners();
-			resolve(alive);
-		};
-
-		socket.once("connect", () => {
-			socket.end();
-			cleanup(true);
-		});
-		socket.once("error", () => {
-			cleanup(false);
-		});
-	});
-}
-
-type LiveSessionInfo = {
-	sessionId: string;
-	name?: string;
-	aliases: string[];
-	socketPath: string;
-};
-
-async function getLiveSessions(): Promise<LiveSessionInfo[]> {
-	await ensureControlDir();
-	const entries = await fs.readdir(CONTROL_DIR, { withFileTypes: true });
-	const aliasMap = await getAliasMap();
-	const sessions: LiveSessionInfo[] = [];
-
-	for (const entry of entries) {
-		if (!entry.name.endsWith(SOCKET_SUFFIX)) continue;
-		const socketPath = path.join(CONTROL_DIR, entry.name);
-		const alive = await isSocketAlive(socketPath);
-		if (!alive) continue;
-		const sessionId = entry.name.slice(0, -SOCKET_SUFFIX.length);
-		if (!isSafeSessionId(sessionId)) continue;
-		const aliases = aliasMap.get(socketPath) ?? [];
-		const name = aliases[0];
-		sessions.push({ sessionId, name, aliases, socketPath });
-	}
-
-	sessions.sort((a, b) => (a.name ?? a.sessionId).localeCompare(b.name ?? b.sessionId));
-	return sessions;
-}
-
-async function syncAlias(state: SocketState, ctx: ExtensionContext): Promise<void> {
-	if (!state.server || !state.socketPath) return;
-	const alias = getSessionAlias(ctx);
-	if (alias && alias !== state.alias) {
-		await removeAliasesForSocket(state.socketPath);
-		await createAliasSymlink(ctx.sessionManager.getSessionId(), alias);
-		state.alias = alias;
-		return;
-	}
-	if (!alias && state.alias) {
-		await removeAliasesForSocket(state.socketPath);
-		state.alias = null;
-	}
-}
-
-function writeResponse(socket: net.Socket, response: RpcResponse): void {
-	try {
-		socket.write(`${JSON.stringify(response)}\n`);
-	} catch {
-		// Socket may be closed
-	}
-}
-
-function writeEvent(socket: net.Socket, event: RpcEvent): void {
-	try {
-		socket.write(`${JSON.stringify(event)}\n`);
-	} catch {
-		// Socket may be closed
-	}
-}
-
-function parseCommand(line: string): { command?: RpcCommand; error?: string } {
-	try {
-		const parsed = JSON.parse(line) as RpcCommand;
-		if (!parsed || typeof parsed !== "object") {
-			return { error: "Invalid command" };
-		}
-		if (typeof parsed.type !== "string") {
-			return { error: "Missing command type" };
-		}
-		return { command: parsed };
-	} catch (error) {
-		return { error: error instanceof Error ? error.message : "Failed to parse command" };
-	}
-}
-
-// ============================================================================
-// Message Extraction
-// ============================================================================
-
-interface ExtractedMessage {
-	role: "user" | "assistant";
-	content: string;
-	timestamp: number;
-}
-
-function getLastAssistantMessage(ctx: ExtensionContext): ExtractedMessage | undefined {
-	const branch = ctx.sessionManager.getBranch();
-
-	for (let i = branch.length - 1; i >= 0; i--) {
-		const entry = branch[i];
-		if (entry.type === "message") {
-			const msg = entry.message;
-			if ("role" in msg && msg.role === "assistant") {
-				const textParts = msg.content
-					.filter((c): c is { type: "text"; text: string } => c.type === "text")
-					.map((c) => c.text);
-				if (textParts.length > 0) {
-					return {
-						role: "assistant",
-						content: textParts.join("\n"),
-						timestamp: msg.timestamp,
-					};
-				}
-			}
-		}
-	}
-	return undefined;
-}
-
-function getMessagesSinceLastPrompt(ctx: ExtensionContext): ExtractedMessage[] {
-	const branch = ctx.sessionManager.getBranch();
-	const messages: ExtractedMessage[] = [];
-
-	let lastUserIndex = -1;
-	for (let i = branch.length - 1; i >= 0; i--) {
-		const entry = branch[i];
-		if (entry.type === "message" && "role" in entry.message && entry.message.role === "user") {
-			lastUserIndex = i;
-			break;
-		}
-	}
-
-	if (lastUserIndex === -1) return [];
-
-	for (let i = lastUserIndex; i < branch.length; i++) {
-		const entry = branch[i];
-		if (entry.type === "message") {
-			const msg = entry.message;
-			if ("role" in msg && (msg.role === "user" || msg.role === "assistant")) {
-				const textParts = msg.content
-					.filter((c): c is { type: "text"; text: string } => c.type === "text")
-					.map((c) => c.text);
-				if (textParts.length > 0) {
-					messages.push({
-						role: msg.role,
-						content: textParts.join("\n"),
-						timestamp: msg.timestamp,
-					});
-				}
-			}
-		}
-	}
-
-	return messages;
-}
-
-function getFirstEntryId(ctx: ExtensionContext): string | undefined {
-	const entries = ctx.sessionManager.getEntries();
-	if (entries.length === 0) return undefined;
-	const root = entries.find((e) => e.parentId === null);
-	return root?.id ?? entries[0]?.id;
-}
-
-function extractTextContent(content: string | Array<TextContent | { type: string }>): string {
-	if (typeof content === "string") return content;
-	return content
-		.filter((c): c is TextContent => c.type === "text")
-		.map((c) => c.text)
-		.join("\n");
-}
-
-function stripSenderInfo(text: string): string {
-	return text.replace(SENDER_INFO_PATTERN, "").trim();
-}
-
-interface SenderInfo {
-	sessionId?: string;
-	sessionName?: string;
-}
-
-function parseSenderInfo(text: string): SenderInfo | null {
-	const match = text.match(/<sender_info>([\s\S]*?)<\/sender_info>/);
-	if (!match) return null;
-	const raw = match[1].trim();
-	if (!raw) return null;
-
-	if (raw.startsWith("{")) {
-		try {
-			const parsed = JSON.parse(raw) as { sessionId?: unknown; sessionName?: unknown };
-			const sessionId = typeof parsed.sessionId === "string" ? parsed.sessionId.trim() : "";
-			const sessionName = typeof parsed.sessionName === "string" ? parsed.sessionName.trim() : "";
-			if (sessionId || sessionName) {
-				return {
-					sessionId: sessionId || undefined,
-					sessionName: sessionName || undefined,
-				};
-			}
-		} catch {
-			// Ignore JSON parse errors, fall back to legacy parsing.
-		}
-	}
-
-	const legacyIdMatch = raw.match(/session\s+([a-f0-9-]{6,})/i);
-	if (legacyIdMatch) {
-		return { sessionId: legacyIdMatch[1] };
-	}
-
-	return null;
-}
-
-function formatSenderInfo(info: SenderInfo | null): string | null {
-	if (!info) return null;
-	const { sessionName, sessionId } = info;
-	if (sessionName && sessionId) return `${sessionName} (${sessionId})`;
-	if (sessionName) return sessionName;
-	if (sessionId) return sessionId;
-	return null;
-}
 
 const renderSessionMessage: MessageRenderer = (message, { expanded }, theme) => {
 	const rawContent = extractTextContent(message.content);
@@ -655,8 +241,10 @@ async function handleCommand(
 				.join("\n");
 
 			respond(true, "get_summary", { summary, model: model.id });
-		} catch (error) {
-			respond(false, "get_summary", undefined, error instanceof Error ? error.message : "Summarization failed");
+		} catch (error: unknown) {
+			const message = error instanceof Error ? error.message : String(error);
+			process.stderr.write(`[control] Summarization failed: ${message}\n`);
+			respond(false, "get_summary", undefined, `Summarization failed: ${message}`);
 		}
 		return;
 	}
@@ -688,13 +276,20 @@ async function handleCommand(
 			return;
 		}
 
-		// Access internal session manager to rewind (type assertion to access non-readonly methods)
+		// Access internal session manager to rewind.
+		// NOTE: rewindTo is not on ReadonlySessionManager. This relies on the runtime
+		// object having the method — will produce a clear error if the internal API changes.
 		try {
-			const sessionManager = ctx.sessionManager as unknown as { rewindTo(id: string): void };
-			sessionManager.rewindTo(firstEntryId);
+			const sm = ctx.sessionManager as Record<string, unknown>;
+			if (typeof sm.rewindTo !== "function") {
+				respond(false, "clear", undefined, "Session manager does not support rewindTo");
+				return;
+			}
+			(sm.rewindTo as (id: string) => void)(firstEntryId);
 			respond(true, "clear", { cleared: true, targetId: firstEntryId });
-		} catch (error) {
-			respond(false, "clear", undefined, error instanceof Error ? error.message : "Clear failed");
+		} catch (error: unknown) {
+			const message = error instanceof Error ? error.message : String(error);
+			respond(false, "clear", undefined, `Clear failed: ${message}`);
 		}
 		return;
 	}
@@ -779,95 +374,7 @@ async function createServer(pi: ExtensionAPI, state: SocketState, socketPath: st
 	return server;
 }
 
-interface RpcClientOptions {
-	timeout?: number;
-	waitForEvent?: "turn_end";
-}
-
-async function sendRpcCommand(
-	socketPath: string,
-	command: RpcCommand,
-	options: RpcClientOptions = {},
-): Promise<{ response: RpcResponse; event?: { message?: ExtractedMessage; turnIndex?: number } }> {
-	const { timeout = 5000, waitForEvent } = options;
-
-	return new Promise((resolve, reject) => {
-		const socket = net.createConnection(socketPath);
-		socket.setEncoding("utf8");
-
-		const timeoutHandle = setTimeout(() => {
-			socket.destroy(new Error("timeout"));
-		}, timeout);
-
-		let buffer = "";
-		let response: RpcResponse | null = null;
-
-		const cleanup = () => {
-			clearTimeout(timeoutHandle);
-			socket.removeAllListeners();
-		};
-
-		socket.on("connect", () => {
-			socket.write(`${JSON.stringify(command)}\n`);
-
-			// If waiting for turn_end, also subscribe
-			if (waitForEvent === "turn_end") {
-				const subscribeCmd: RpcSubscribeCommand = { type: "subscribe", event: "turn_end" };
-				socket.write(`${JSON.stringify(subscribeCmd)}\n`);
-			}
-		});
-
-		socket.on("data", (chunk) => {
-			buffer += chunk;
-			let newlineIndex = buffer.indexOf("\n");
-			while (newlineIndex !== -1) {
-				const line = buffer.slice(0, newlineIndex).trim();
-				buffer = buffer.slice(newlineIndex + 1);
-				newlineIndex = buffer.indexOf("\n");
-				if (!line) continue;
-
-				try {
-					const msg = JSON.parse(line);
-
-					// Handle response
-					if (msg.type === "response") {
-						if (msg.command === command.type) {
-							response = msg;
-							// If not waiting for event, we're done
-							if (!waitForEvent) {
-								cleanup();
-								socket.end();
-								resolve({ response });
-								return;
-							}
-						}
-						// Ignore subscribe response
-						continue;
-					}
-
-					// Handle turn_end event
-					if (msg.type === "event" && msg.event === "turn_end" && waitForEvent === "turn_end") {
-						cleanup();
-						socket.end();
-						if (!response) {
-							reject(new Error("Received event before response"));
-							return;
-						}
-						resolve({ response, event: msg.data || {} });
-						return;
-					}
-				} catch {
-					// Ignore parse errors, keep waiting
-				}
-			}
-		});
-
-		socket.on("error", (error) => {
-			cleanup();
-			reject(error);
-		});
-	});
-}
+// sendRpcCommand imported from ./lib/control-rpc.ts
 
 async function startControlServer(pi: ExtensionAPI, state: SocketState, ctx: ExtensionContext): Promise<void> {
 	await ensureControlDir();
@@ -1259,8 +766,9 @@ Messages automatically include sender session info for replies. When you want a 
 					content: [{ type: "text", text: `Message sent to session ${displayTarget || targetSessionId}` }],
 					details: result.response.data,
 				};
-			} catch (error) {
-				const message = error instanceof Error ? error.message : "Unknown error";
+			} catch (error: unknown) {
+				const message = error instanceof Error ? error.message : String(error);
+				process.stderr.write(`[control] send_to_session error: ${message}\n`);
 				return {
 					content: [{ type: "text", text: `Failed: ${message}` }],
 					isError: true,

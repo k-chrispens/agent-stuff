@@ -532,6 +532,7 @@ async function readTail(filePath: string, maxBytes = 256 * 1024): Promise<string
 		}
 		return chunk;
 	} catch {
+		// File unreadable (deleted, permissions) — no history from this file
 		return "";
 	} finally {
 		await fileHandle?.close();
@@ -546,6 +547,7 @@ async function loadPromptHistoryForCwd(cwd: string, excludeSessionFile?: string)
 	try {
 		entries = await fs.readdir(sessionDir, { withFileTypes: true });
 	} catch {
+		// Session dir doesn't exist yet — no history
 		return prompts;
 	}
 	const files = await Promise.all(
@@ -557,6 +559,7 @@ async function loadPromptHistoryForCwd(cwd: string, excludeSessionFile?: string)
 					const stats = await fs.stat(filePath);
 					return { filePath, mtimeMs: stats.mtimeMs };
 				} catch {
+					// File removed between readdir and stat — skip
 					return undefined;
 				}
 			})
@@ -570,10 +573,11 @@ async function loadPromptHistoryForCwd(cwd: string, excludeSessionFile?: string)
 		if (!tail) continue;
 		const lines = tail.split("\n").filter(Boolean);
 		for (const line of lines) {
-			let entry: any;
+			let entry: { type?: string; message?: { role?: string; content?: Array<{ type: string; text?: string }>; timestamp?: number }; timestamp?: number };
 			try {
 				entry = JSON.parse(line);
 			} catch {
+				// Malformed JSONL line — skip
 				continue;
 			}
 			if (entry?.type !== "message") continue;

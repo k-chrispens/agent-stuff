@@ -7,7 +7,8 @@
  */
 
 import { Type } from "@sinclair/typebox";
-import type { ExtensionAPI, ExtensionContext, SessionSwitchEvent } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, SessionSwitchEvent, AgentEndEvent } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { compact } from "@mariozechner/pi-coding-agent";
 import { Container, type SelectItem, SelectList, Text } from "@mariozechner/pi-tui";
 import { DynamicBorder } from "@mariozechner/pi-coding-agent";
@@ -119,10 +120,10 @@ export default function loopExtension(pi: ExtensionAPI): void {
 		ctx.ui.notify("Loop ended", "info");
 	}
 
-	function wasLastAssistantAborted(messages: Array<{ role?: string; stopReason?: string }>): boolean {
+	function wasLastAssistantAborted(messages: AgentMessage[]): boolean {
 		for (let i = messages.length - 1; i >= 0; i--) {
 			const message = messages[i];
-			if (message?.role === "assistant") {
+			if (message && "role" in message && message.role === "assistant") {
 				return message.stopReason === "aborted";
 			}
 		}
@@ -322,9 +323,10 @@ export default function loopExtension(pi: ExtensionAPI): void {
 		try {
 			const compaction = await compact(event.preparation, ctx.model, apiKey, instructionParts, event.signal);
 			return { compaction };
-		} catch (error) {
+		} catch (error: unknown) {
+			const message = error instanceof Error ? error.message : String(error);
+			process.stderr.write(`[loop] Compaction failed: ${message}\n`);
 			if (ctx.hasUI) {
-				const message = error instanceof Error ? error.message : String(error);
 				ctx.ui.notify(`Loop compaction failed: ${message}`, "warning");
 			}
 			return;

@@ -20,51 +20,25 @@
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { createBashTool } from "@mariozechner/pi-coding-agent";
-import { dirname, join } from "path";
-import { fileURLToPath } from "url";
-import { existsSync, readFileSync } from "fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { isUvProject } from "./lib/python-project.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const interceptedCommandsPath = join(__dirname, "..", "intercepted-commands");
 
-function isPixiProject(cwd: string): boolean {
-  if (existsSync(join(cwd, "pixi.toml"))) return true;
-  if (existsSync(join(cwd, "pixi.lock"))) return true;
-
-  const pyproject = join(cwd, "pyproject.toml");
-  if (existsSync(pyproject)) {
-    try {
-      const content = readFileSync(pyproject, "utf-8");
-      if (content.includes("[tool.pixi")) return true;
-    } catch {}
-  }
-
-  return false;
-}
-
-function isUvProject(cwd: string): boolean {
-  // Skip if this is a pixi project (pixi.ts handles those)
-  if (isPixiProject(cwd)) return false;
-
-  if (existsSync(join(cwd, "uv.lock"))) return true;
-  if (existsSync(join(cwd, ".python-version"))) return true;
-  if (existsSync(join(cwd, "pyproject.toml"))) return true;
-
-  return false;
-}
-
 export default function (pi: ExtensionAPI) {
-  const cwd = process.cwd();
+	const cwd = process.cwd();
 
-  if (!isUvProject(cwd)) return;
+	if (!isUvProject(cwd)) return;
 
-  const bashTool = createBashTool(cwd, {
-    commandPrefix: `export PATH="${interceptedCommandsPath}:$PATH"`,
-  });
+	const bashTool = createBashTool(cwd, {
+		commandPrefix: `export PATH="${interceptedCommandsPath}:$PATH"`,
+	});
 
-  pi.on("session_start", (_event, ctx) => {
-    if (ctx.hasUI) ctx.ui.notify("UV interceptor loaded", "info");
-  });
+	pi.on("session_start", (_event, ctx) => {
+		if (ctx.hasUI) ctx.ui.notify("UV interceptor loaded", "info");
+	});
 
-  pi.registerTool(bashTool);
+	pi.registerTool(bashTool);
 }

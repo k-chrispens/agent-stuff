@@ -211,6 +211,7 @@ const normalizeReferencePath = (raw: string, cwd: string): string | null => {
 		try {
 			candidate = fileURLToPath(candidate);
 		} catch {
+			// Malformed file:// URL — not a valid path reference
 			return null;
 		}
 	}
@@ -294,7 +295,8 @@ const toCanonicalPath = (inputPath: string): { canonicalPath: string; isDirector
 		const canonicalPath = realpathSync(inputPath);
 		const stats = statSync(canonicalPath);
 		return { canonicalPath, isDirectory: stats.isDirectory() };
-	} catch {
+	} catch (error: unknown) {
+		// File disappeared between existsSync check and realpathSync, or permission error
 		return null;
 	}
 };
@@ -312,6 +314,7 @@ const toCanonicalPathMaybeMissing = (
 		const stats = statSync(canonicalPath);
 		return { canonicalPath, isDirectory: stats.isDirectory(), exists: true };
 	} catch {
+		// Can't resolve symlinks or stat — fall back to normalized path
 		return { canonicalPath: path.normalize(resolvedPath), isDirectory: false, exists: true };
 	}
 };
@@ -711,6 +714,7 @@ const openExternalEditor = (tui: TUI, editorCmd: string, content: string): strin
 		try {
 			unlinkSync(tmpFile);
 		} catch {
+			// Temp file already cleaned up — ignore
 		}
 		tui.start();
 		tui.requestRender(true);
@@ -742,8 +746,9 @@ const editPath = async (ctx: ExtensionContext, target: FileEntry, content: strin
 
 	try {
 		writeFileSync(target.resolvedPath, updated, "utf8");
-	} catch {
-		ctx.ui.notify(`Failed to save ${target.displayPath}`, "error");
+	} catch (error: unknown) {
+		const message = error instanceof Error ? error.message : String(error);
+		ctx.ui.notify(`Failed to save ${target.displayPath}: ${message}`, "error");
 	}
 };
 
