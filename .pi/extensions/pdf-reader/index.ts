@@ -37,6 +37,9 @@ const MAX_IMAGE_DIM = 1024;
 // Maximum source image pixels before skipping (prevents huge RGBA buffer allocations).
 // 16 megapixels = 64 MB RGBA buffer, which is a reasonable upper bound.
 const MAX_IMAGE_SOURCE_PIXELS = 16_000_000;
+// Maximum cumulative RGBA bytes across all extracted images (limits peak memory).
+// 128 MB covers ~8 full-size 4096x4096 RGBA buffers or many smaller ones.
+const MAX_TOTAL_IMAGE_BYTES = 128 * 1024 * 1024;
 // Maximum number of images to extract (limits memory and token usage)
 const MAX_EXTRACTED_IMAGES = 20;
 
@@ -290,6 +293,7 @@ export default function (pi: ExtensionAPI) {
 				const extractedImages: ExtractedImage[] = [];
 				let imagesSkipped = 0;
 				let imageCapReached = false;
+				let totalImageBytes = 0;
 
 				// Track seen images across all pages (PDFs reuse image XObjects)
 				const seenImages = new Set<string>();
@@ -376,8 +380,8 @@ export default function (pi: ExtensionAPI) {
 							if (seenImages.has(imgName)) continue;
 							seenImages.add(imgName);
 
-							// Enforce image extraction limit
-							if (extractedImages.length >= MAX_EXTRACTED_IMAGES) {
+							// Enforce image extraction limit (count and cumulative memory)
+							if (extractedImages.length >= MAX_EXTRACTED_IMAGES || totalImageBytes >= MAX_TOTAL_IMAGE_BYTES) {
 								imagesSkipped++;
 								imageCapReached = true;
 								break;
@@ -422,6 +426,14 @@ export default function (pi: ExtensionAPI) {
 									}
 									kind = inferred;
 								}
+
+								// Check cumulative memory budget before allocating RGBA buffer
+								const rgbaBytes = imgObj.width * imgObj.height * 4;
+								if (totalImageBytes + rgbaBytes > MAX_TOTAL_IMAGE_BYTES) {
+									imagesSkipped++;
+									continue;
+								}
+								totalImageBytes += rgbaBytes;
 
 								const { buffer, finalWidth, finalHeight } = imageToPngBuffer(
 									imgObj.data,

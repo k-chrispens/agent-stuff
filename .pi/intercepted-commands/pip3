@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+echo "ERROR: pip is intercepted by the uv extension." >&2
+echo "" >&2
+echo "Use uv equivalents instead:" >&2
+echo "  uv add <package>              # add a project dependency" >&2
+echo "  uv run --with <pkg> <cmd>     # run with a temporary dependency" >&2
+echo "  uv pip install <package>      # escape hatch (uv's pip interface)" >&2
+echo "" >&2
+echo "To install from requirements.txt:" >&2
+echo "  uv pip install -r requirements.txt" >&2
+exit 1

@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+echo "ERROR: poetry is intercepted by the uv extension." >&2
+echo "" >&2
+echo "Use uv equivalents instead:" >&2
+echo "  uv init                        # instead of poetry init" >&2
+echo "  uv add <package>               # instead of poetry add" >&2
+echo "  uv sync                        # instead of poetry install" >&2
+echo "  uv run <command>               # instead of poetry run" >&2
+exit 1

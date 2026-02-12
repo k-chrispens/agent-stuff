@@ -10,8 +10,9 @@
  * 4. Submits the compiled answers when done
  */
 
-import { complete, type Model, type Api, type UserMessage } from "@mariozechner/pi-ai";
+import { complete, type UserMessage } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { selectSmallModel } from "./lib/model-selection.ts";
 import { BorderedLoader } from "@mariozechner/pi-coding-agent";
 import {
 	type Component,
@@ -66,40 +67,6 @@ Example output:
     }
   ]
 }`;
-
-const CODEX_MODEL_ID = "gpt-5.1-codex-mini";
-const HAIKU_MODEL_ID = "claude-haiku-4-5";
-
-/**
- * Prefer Codex mini for extraction when available, otherwise fallback to haiku or the current model.
- */
-async function selectExtractionModel(
-	currentModel: Model<Api>,
-	modelRegistry: {
-		find: (provider: string, modelId: string) => Model<Api> | undefined;
-		getApiKey: (model: Model<Api>) => Promise<string | undefined>;
-	},
-): Promise<Model<Api>> {
-	const codexModel = modelRegistry.find("openai-codex", CODEX_MODEL_ID);
-	if (codexModel) {
-		const apiKey = await modelRegistry.getApiKey(codexModel);
-		if (apiKey) {
-			return codexModel;
-		}
-	}
-
-	const haikuModel = modelRegistry.find("anthropic", HAIKU_MODEL_ID);
-	if (!haikuModel) {
-		return currentModel;
-	}
-
-	const apiKey = await modelRegistry.getApiKey(haikuModel);
-	if (!apiKey) {
-		return currentModel;
-	}
-
-	return haikuModel;
-}
 
 /**
  * Parse the JSON response from the LLM
@@ -449,7 +416,11 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			// Select the best model for extraction (prefer Codex mini, then haiku)
-			const extractionModel = await selectExtractionModel(ctx.model, ctx.modelRegistry);
+			const extractionModel = await selectSmallModel(ctx.model, ctx.modelRegistry);
+			if (!extractionModel) {
+				ctx.ui.notify("No model available for extraction", "error");
+				return;
+			}
 
 			// Run extraction with loader UI
 			const extractionResult = await ctx.ui.custom<ExtractionResult | null>((tui, theme, _kb, done) => {

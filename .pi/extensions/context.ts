@@ -9,6 +9,7 @@
  */
 
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, ToolResultEvent } from "@mariozechner/pi-coding-agent";
+import { extractCostTotal } from "./lib/cost.ts";
 import { DynamicBorder } from "@mariozechner/pi-coding-agent";
 import { Container, Key, Text, matchesKey, type Component, type TUI } from "@mariozechner/pi-tui";
 import os from "node:os";
@@ -150,23 +151,6 @@ function getLoadedSkillsFromSession(ctx: ExtensionContext): Set<string> {
 		if (data?.name) out.add(data.name);
 	}
 	return out;
-}
-
-function extractCostTotal(usage: any): number {
-	if (!usage) return 0;
-	const c = usage?.cost;
-	if (typeof c === "number") return Number.isFinite(c) ? c : 0;
-	if (typeof c === "string") {
-		const n = Number(c);
-		return Number.isFinite(n) ? n : 0;
-	}
-	const t = c?.total;
-	if (typeof t === "number") return Number.isFinite(t) ? t : 0;
-	if (typeof t === "string") {
-		const n = Number(t);
-		return Number.isFinite(n) ? n : 0;
-	}
-	return 0;
 }
 
 function sumSessionUsage(ctx: ExtensionCommandContext): {

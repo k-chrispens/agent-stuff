@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Intercept python to run through uv, but block dangerous sub-commands.
+for arg in "$@"; do
+  case "$arg" in
+    -m)
+      next=false
+      for a in "$@"; do
+        if $next; then
+          case "$a" in
+            pip|pip3)
+              echo "ERROR: 'python -m pip' is intercepted by the uv extension." >&2
+              echo "Use: uv add <package>" >&2
+              exit 1
+              ;;
+            venv)
+              echo "ERROR: 'python -m venv' is intercepted by the uv extension." >&2
+              echo "Use: uv venv" >&2
+              exit 1
+              ;;
+          esac
+          break
+        fi
+        [ "$a" = "-m" ] && next=true
+      done
+      break
+      ;;
+  esac
+done
+exec uv run python "$@"

@@ -14,6 +14,7 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { extractCostTotal } from "./lib/cost.ts";
 import { BorderedLoader } from "@mariozechner/pi-coding-agent";
 import {
 	Key,
@@ -207,23 +208,6 @@ function extractProviderModelAndUsage(obj: any): { provider?: any; model?: any; 
 		modelId: obj?.modelId ?? msg?.modelId,
 		usage: obj?.usage ?? msg?.usage,
 	};
-}
-
-function extractCostTotal(usage: any): number {
-	if (!usage) return 0;
-	const c = usage?.cost;
-	if (typeof c === "number") return Number.isFinite(c) ? c : 0;
-	if (typeof c === "string") {
-		const n = Number(c);
-		return Number.isFinite(n) ? n : 0;
-	}
-	const t = c?.total;
-	if (typeof t === "number") return Number.isFinite(t) ? t : 0;
-	if (typeof t === "string") {
-		const n = Number(t);
-		return Number.isFinite(n) ? n : 0;
-	}
-	return 0;
 }
 
 async function walkSessionFiles(root: string, signal?: AbortSignal): Promise<string[]> {

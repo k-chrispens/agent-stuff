@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+echo "ERROR: conda is intercepted by the pixi extension." >&2
+echo "" >&2
+echo "Use pixi equivalents instead:" >&2
+echo "  pixi add <package>            # add a conda-forge dependency" >&2
+echo "  pixi add -c <channel> <pkg>   # add from a specific channel" >&2
+echo "  pixi install                   # install all dependencies" >&2
+echo "  pixi run <command>             # run a command in the pixi env" >&2
+exit 1

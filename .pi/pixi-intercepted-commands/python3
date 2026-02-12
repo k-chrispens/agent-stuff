@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Intercept python to run through pixi, but block dangerous sub-commands.
+for arg in "$@"; do
+  case "$arg" in
+    -m)
+      # Check the module name (next argument after -m)
+      next=false
+      for a in "$@"; do
+        if $next; then
+          case "$a" in
+            pip|pip3)
+              echo "ERROR: 'python -m pip' is intercepted by the pixi extension." >&2
+              echo "Use: pixi add --pypi <package>" >&2
+              exit 1
+              ;;
+            venv)
+              echo "ERROR: 'python -m venv' is intercepted by the pixi extension." >&2
+              echo "Pixi manages its own environments. No venv needed." >&2
+              exit 1
+              ;;
+          esac
+          break
+        fi
+        [ "$a" = "-m" ] && next=true
+      done
+      break
+      ;;
+  esac
+done
+exec pixi run python "$@"

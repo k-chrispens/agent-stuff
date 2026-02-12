@@ -7,7 +7,6 @@
  */
 
 import { Type } from "@sinclair/typebox";
-import { complete, type Api, type Model, type UserMessage } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext, SessionSwitchEvent } from "@mariozechner/pi-coding-agent";
 import { compact } from "@mariozechner/pi-coding-agent";
 import { Container, type SelectItem, SelectList, Text } from "@mariozechner/pi-tui";
@@ -31,16 +30,6 @@ const LOOP_PRESETS = [
 ] as const;
 
 const LOOP_STATE_ENTRY = "loop-state";
-
-const HAIKU_MODEL_ID = "claude-haiku-4-5";
-
-const SUMMARY_SYSTEM_PROMPT = `You summarize loop breakout conditions for a status widget.
-Return a concise phrase (max 6 words) that says when the loop should stop.
-Use plain text only, no quotes, no punctuation, no prefix.
-
-Form should be "breaks when ...", "loops until ...", "stops on ...", "runs until ...", or similar.
-Use the best form that makes sense for the loop condition.
-`;
 
 function buildPrompt(mode: LoopMode, condition?: string): string {
 	switch (mode) {
@@ -74,76 +63,8 @@ function summarizeCondition(mode: LoopMode, condition?: string): string {
 	}
 }
 
-function getConditionText(mode: LoopMode, condition?: string): string {
-	switch (mode) {
-		case "tests":
-			return "tests pass";
-		case "custom":
-			return condition?.trim() || "custom condition";
-		case "self":
-			return "you are done";
-	}
-}
-
-async function selectSummaryModel(
-	ctx: ExtensionContext,
-): Promise<{ model: Model<Api>; apiKey: string } | null> {
-	if (!ctx.model) return null;
-
-	if (ctx.model.provider === "anthropic") {
-		const haikuModel = ctx.modelRegistry.find("anthropic", HAIKU_MODEL_ID);
-		if (haikuModel) {
-			const apiKey = await ctx.modelRegistry.getApiKey(haikuModel);
-			if (apiKey) {
-				return { model: haikuModel, apiKey };
-			}
-		}
-	}
-
-	const apiKey = await ctx.modelRegistry.getApiKey(ctx.model);
-	if (!apiKey) return null;
-	return { model: ctx.model, apiKey };
-}
-
-async function summarizeBreakoutCondition(
-	ctx: ExtensionContext,
-	mode: LoopMode,
-	condition?: string,
-): Promise<string> {
-	const fallback = summarizeCondition(mode, condition);
-	const selection = await selectSummaryModel(ctx);
-	if (!selection) return fallback;
-
-	const conditionText = getConditionText(mode, condition);
-	const userMessage: UserMessage = {
-		role: "user",
-		content: [{ type: "text", text: conditionText }],
-		timestamp: Date.now(),
-	};
-
-	const response = await complete(
-		selection.model,
-		{ systemPrompt: SUMMARY_SYSTEM_PROMPT, messages: [userMessage] },
-		{ apiKey: selection.apiKey },
-	);
-
-	if (response.stopReason === "aborted" || response.stopReason === "error") {
-		return fallback;
-	}
-
-	const summary = response.content
-		.filter((c): c is { type: "text"; text: string } => c.type === "text")
-		.map((c) => c.text)
-		.join(" ")
-		.replace(/\s+/g, " ")
-		.trim();
-
-	if (!summary) return fallback;
-	return summary.length > 60 ? `${summary.slice(0, 57)}...` : summary;
-}
-
 function getCompactionInstructions(mode: LoopMode, condition?: string): string {
-	const conditionText = getConditionText(mode, condition);
+	const conditionText = summarizeCondition(mode, condition);
 	return `Loop active. Breakout condition: ${conditionText}. Preserve this loop state and breakout condition in the summary.`;
 }
 
@@ -364,20 +285,11 @@ export default function loopExtension(pi: ExtensionAPI): void {
 				}
 			}
 
-			const summarizedState: LoopStateData = { ...nextState, summary: undefined, loopCount: 0 };
+			const summary = summarizeCondition(nextState.mode!, nextState.condition);
+			const summarizedState: LoopStateData = { ...nextState, summary, loopCount: 0 };
 			setLoopState(summarizedState, ctx);
 			ctx.ui.notify("Loop active", "info");
 			triggerLoopPrompt(ctx);
-
-			const mode = nextState.mode!;
-			const condition = nextState.condition;
-			void (async () => {
-				const summary = await summarizeBreakoutCondition(ctx, mode, condition);
-				if (!loopState.active || loopState.mode !== mode || loopState.condition !== condition) return;
-				loopState = { ...loopState, summary };
-				persistState(loopState);
-				updateStatus(ctx, loopState);
-			})();
 		},
 	});
 
@@ -421,19 +333,13 @@ export default function loopExtension(pi: ExtensionAPI): void {
 
 	async function restoreLoopState(ctx: ExtensionContext): Promise<void> {
 		loopState = await loadState(ctx);
-		updateStatus(ctx, loopState);
 
 		if (loopState.active && loopState.mode && !loopState.summary) {
-			const mode = loopState.mode;
-			const condition = loopState.condition;
-			void (async () => {
-				const summary = await summarizeBreakoutCondition(ctx, mode, condition);
-				if (!loopState.active || loopState.mode !== mode || loopState.condition !== condition) return;
-				loopState = { ...loopState, summary };
-				persistState(loopState);
-				updateStatus(ctx, loopState);
-			})();
+			loopState = { ...loopState, summary: summarizeCondition(loopState.mode, loopState.condition) };
+			persistState(loopState);
 		}
+
+		updateStatus(ctx, loopState);
 	}
 
 	pi.on("session_start", async (_event, ctx) => {

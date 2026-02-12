@@ -37,8 +37,9 @@
 
 import type { ExtensionAPI, ExtensionContext, TurnEndEvent, MessageRenderer } from "@mariozechner/pi-coding-agent";
 import { getMarkdownTheme } from "@mariozechner/pi-coding-agent";
-import { complete, type Model, type Api, type UserMessage, type TextContent } from "@mariozechner/pi-ai";
+import { complete, type UserMessage, type TextContent } from "@mariozechner/pi-ai";
 import { StringEnum } from "@mariozechner/pi-ai";
+import { selectSmallModel } from "./lib/model-selection.ts";
 import { Box, Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { promises as fs } from "node:fs";
@@ -137,9 +138,6 @@ interface SocketState {
 // Summarization
 // ============================================================================
 
-const CODEX_MODEL_ID = "gpt-5.1-codex-mini";
-const HAIKU_MODEL_ID = "claude-haiku-4-5";
-
 const SUMMARIZATION_SYSTEM_PROMPT = `You are a conversation summarizer. Create concise, accurate summaries that preserve key information, decisions, and outcomes.`;
 
 const TURN_SUMMARY_PROMPT = `Summarize what happened in this conversation since the last user prompt. Focus on:
@@ -150,28 +148,6 @@ const TURN_SUMMARY_PROMPT = `Summarize what happened in this conversation since 
 - Current state/next steps
 
 Be concise but comprehensive. Preserve exact file paths, function names, and error messages.`;
-
-async function selectSummarizationModel(
-	currentModel: Model<Api> | undefined,
-	modelRegistry: {
-		find: (provider: string, modelId: string) => Model<Api> | undefined;
-		getApiKey: (model: Model<Api>) => Promise<string | undefined>;
-	},
-): Promise<Model<Api> | undefined> {
-	const codexModel = modelRegistry.find("openai-codex", CODEX_MODEL_ID);
-	if (codexModel) {
-		const apiKey = await modelRegistry.getApiKey(codexModel);
-		if (apiKey) return codexModel;
-	}
-
-	const haikuModel = modelRegistry.find("anthropic", HAIKU_MODEL_ID);
-	if (haikuModel) {
-		const apiKey = await modelRegistry.getApiKey(haikuModel);
-		if (apiKey) return haikuModel;
-	}
-
-	return currentModel;
-}
 
 // ============================================================================
 // Utilities
@@ -639,7 +615,7 @@ async function handleCommand(
 			return;
 		}
 
-		const model = await selectSummarizationModel(ctx.model, ctx.modelRegistry);
+		const model = await selectSmallModel(ctx.model, ctx.modelRegistry);
 		if (!model) {
 			respond(false, "get_summary", undefined, "No model available for summarization");
 			return;
@@ -1337,7 +1313,7 @@ Messages automatically include sender session info for replies. When you want a 
 
 			// Error case
 			if (isError || details?.error) {
-				const errorMsg = (details?.error as string) || result.content[0]?.type === "text" ? (result.content[0] as { type: "text"; text: string }).text : "Unknown error";
+				const errorMsg = (details?.error as string) || (result.content[0]?.type === "text" ? (result.content[0] as { type: "text"; text: string }).text : "Unknown error");
 				return new Text(theme.fg("error", "✗ ") + theme.fg("error", errorMsg), 0, 0);
 			}
 

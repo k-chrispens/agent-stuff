@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+echo "ERROR: pip is intercepted by the pixi extension." >&2
+echo "" >&2
+echo "Use pixi equivalents instead:" >&2
+echo "  pixi add --pypi <package>     # add a PyPI dependency" >&2
+echo "  pixi run python -m <module>   # run a module inside the pixi env" >&2
+echo "" >&2
+echo "To install from requirements.txt:" >&2
+echo "  pixi add --pypi \$(cat requirements.txt | tr '\\n' ' ')" >&2
+exit 1
