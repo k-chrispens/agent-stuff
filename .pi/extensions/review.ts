@@ -32,11 +32,6 @@ import { Container, type SelectItem, SelectList, Text, Key } from "@mariozechner
 import path from "node:path";
 import { promises as fs } from "node:fs";
 
-// State to track fresh session review (where we branched from).
-// Module-level state means only one review can be active at a time.
-// This is intentional - the UI and /end-review command assume a single active review.
-let reviewOriginId: string | undefined = undefined;
-
 const REVIEW_STATE_TYPE = "review-session";
 
 type ReviewSessionState = {
@@ -73,19 +68,6 @@ function getReviewState(ctx: ExtensionContext): ReviewSessionState | undefined {
 	}
 
 	return state;
-}
-
-function applyReviewState(ctx: ExtensionContext) {
-	const state = getReviewState(ctx);
-
-	if (state?.active && state.originId) {
-		reviewOriginId = state.originId;
-		setReviewWidget(ctx, true);
-		return;
-	}
-
-	reviewOriginId = undefined;
-	setReviewWidget(ctx, false);
 }
 
 // Review target types (matching Codex's approach)
@@ -481,6 +463,24 @@ const REVIEW_PRESETS = [
 ] as const;
 
 export default function reviewExtension(pi: ExtensionAPI) {
+	// Per-session cache of the review origin ID. Scoped to the extension closure
+	// (not module-level) so it resets on extension reload and doesn't bleed across
+	// sessions in edge cases like /fork or /resume.
+	let reviewOriginId: string | undefined = undefined;
+
+	function applyReviewState(ctx: ExtensionContext) {
+		const state = getReviewState(ctx);
+
+		if (state?.active && state.originId) {
+			reviewOriginId = state.originId;
+			setReviewWidget(ctx, true);
+			return;
+		}
+
+		reviewOriginId = undefined;
+		setReviewWidget(ctx, false);
+	}
+
 	pi.on("session_start", (_event, ctx) => {
 		applyReviewState(ctx);
 	});

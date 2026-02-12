@@ -4,6 +4,9 @@
  * Sends a native desktop notification when the agent finishes and is waiting for input.
  * Uses OSC 777 escape sequence - no external dependencies.
  *
+ * Skips notifications when the agent has pending follow-up messages (e.g., during
+ * /loop iterations) to avoid notification spam during automated multi-turn flows.
+ *
  * Supported terminals: Ghostty, iTerm2, WezTerm, rxvt-unicode
  * Not supported: Kitty (uses OSC 99), Terminal.app, Windows Terminal, Alacritty
  */
@@ -80,7 +83,11 @@ const formatNotification = (text: string | null): { title: string; body: string 
 };
 
 export default function (pi: ExtensionAPI) {
-	pi.on("agent_end", async (event) => {
+	pi.on("agent_end", async (event, ctx) => {
+		// Skip notification if there are pending messages (e.g., /loop iterations,
+		// follow-up steering messages). Only notify when the agent is truly idle.
+		if (ctx.hasPendingMessages()) return;
+
 		const lastText = extractLastAssistantText(event.messages ?? []);
 		const { title, body } = formatNotification(lastText);
 		notify(title, body);
