@@ -35,9 +35,22 @@ type Pending = "d" | "c" | "y" | "g" | "r" | null;
 /**
  * Check if data is a control/special key sequence that should always
  * pass through to CustomEditor for app-level handling (ctrl+c, ctrl+d, etc.).
+ *
+ * Distinguishes between:
+ * - ANSI escape sequences (start with ESC 0x1b): arrow keys, function keys → true
+ * - Single control characters (charCode < 32): ctrl+c, ctrl+d, enter → true
+ * - Multi-byte Unicode (surrogate pairs, CJK, emoji): not control → false
+ * - Single printable ASCII: regular characters → false
  */
 function isControlSequence(data: string): boolean {
-	return data.length > 1 || data.charCodeAt(0) < 32;
+	if (data.length === 0) return false;
+	const firstChar = data.charCodeAt(0);
+	// Single control character (ctrl+c, ctrl+d, enter, tab, etc.)
+	if (data.length === 1 && firstChar < 32) return true;
+	// ANSI escape sequences start with ESC (0x1b)
+	if (firstChar === 0x1b) return true;
+	// Everything else (including multi-byte Unicode) is printable
+	return false;
 }
 
 class VimEditor extends CustomEditor {
@@ -72,9 +85,22 @@ class VimEditor extends CustomEditor {
 		this.lockedBorder = true;
 	}
 
-	/** Emit a raw key sequence to the base Editor, bypassing CustomEditor keybindings. */
+	/**
+	 * Emit a raw key sequence to the base Editor, bypassing CustomEditor keybindings.
+	 *
+	 * Resolves the Editor (grandparent) handleInput at call time rather than caching
+	 * it at module load. This is resilient to prototype chain changes between extension
+	 * load and execution. Falls back to super.handleInput if the chain is unexpected.
+	 */
 	private emitRaw(seq: string, n = 1) {
-		for (let i = 0; i < n; i++) Editor_handleInput.call(this, seq);
+		const editorHandleInput = resolveEditorHandleInput();
+		if (editorHandleInput) {
+			for (let i = 0; i < n; i++) editorHandleInput.call(this, seq);
+		} else {
+			// Prototype chain changed — fall through to CustomEditor.handleInput.
+			// Less efficient (app keybindings are checked) but functionally correct.
+			for (let i = 0; i < n; i++) super.handleInput(seq);
+		}
 	}
 
 	private get curLine(): string {
@@ -465,9 +491,21 @@ class VimEditor extends CustomEditor {
 	}
 }
 
-// Cache the grandparent (Editor) handleInput for internal key emission,
-// bypassing CustomEditor's app-level keybinding checks.
-const Editor_handleInput = Object.getPrototypeOf(CustomEditor.prototype).handleInput;
+/**
+ * Resolve Editor.prototype.handleInput at call time.
+ *
+ * Walks up from CustomEditor.prototype to find the grandparent (Editor) handleInput,
+ * bypassing CustomEditor's app-level keybinding checks. Returns null if the prototype
+ * chain is unexpected, so callers can fall back gracefully.
+ */
+function resolveEditorHandleInput(): ((data: string) => void) | null {
+	const editorProto = Object.getPrototypeOf(CustomEditor.prototype);
+	if (!editorProto || typeof editorProto.handleInput !== "function") {
+		process.stderr.write("[vim] Warning: Editor prototype chain changed — raw key emission will use fallback\n");
+		return null;
+	}
+	return editorProto.handleInput;
+}
 
 // =============================================================================
 // CWD history (absorbed from cwd-history.ts)

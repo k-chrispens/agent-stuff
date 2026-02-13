@@ -59,9 +59,17 @@ function setReviewWidget(ctx: ExtensionContext, active: boolean) {
 	});
 }
 
+/**
+ * Read the latest review state from session entries.
+ *
+ * Uses getEntries() (all entries) instead of getBranch() so that the review
+ * state persists across tree navigation. The review state entry is appended
+ * on the pre-navigation branch; after navigateTree() the new branch wouldn't
+ * include it if we only scanned getBranch().
+ */
 function getReviewState(ctx: ExtensionContext): ReviewSessionState | undefined {
 	let state: ReviewSessionState | undefined;
-	for (const entry of ctx.sessionManager.getBranch()) {
+	for (const entry of ctx.sessionManager.getEntries()) {
 		if (entry.type === "custom" && entry.customType === REVIEW_STATE_TYPE) {
 			state = entry.data as ReviewSessionState | undefined;
 		}
@@ -470,34 +478,48 @@ const REVIEW_PRESETS = [
 ] as const;
 
 export default function reviewExtension(pi: ExtensionAPI) {
-	// Per-session cache of the review origin ID. Scoped to the extension closure
-	// (not module-level) so it resets on extension reload and doesn't bleed across
-	// sessions in edge cases like /fork or /resume.
+	// In-memory cache of the review origin ID, always derived from persisted
+	// session entries via syncReviewState(). Never set directly — mutations go
+	// through activateReview() / deactivateReview() which persist first, then
+	// update the cache.
 	let reviewOriginId: string | undefined = undefined;
 
-	function applyReviewState(ctx: ExtensionContext) {
+	/** Read persisted state and update in-memory cache + widget. */
+	function syncReviewState(ctx: ExtensionContext): void {
 		const state = getReviewState(ctx);
-
 		if (state?.active && state.originId) {
 			reviewOriginId = state.originId;
 			setReviewWidget(ctx, true);
-			return;
+		} else {
+			reviewOriginId = undefined;
+			setReviewWidget(ctx, false);
 		}
+	}
 
+	/** Persist active review state, then update cache + widget. */
+	function activateReview(ctx: ExtensionContext, originId: string): void {
+		pi.appendEntry(REVIEW_STATE_TYPE, { active: true, originId } satisfies ReviewSessionState);
+		reviewOriginId = originId;
+		setReviewWidget(ctx, true);
+	}
+
+	/** Persist inactive review state, then update cache + widget. */
+	function deactivateReview(ctx: ExtensionContext): void {
+		pi.appendEntry(REVIEW_STATE_TYPE, { active: false } satisfies ReviewSessionState);
 		reviewOriginId = undefined;
 		setReviewWidget(ctx, false);
 	}
 
 	pi.on("session_start", (_event, ctx) => {
-		applyReviewState(ctx);
+		syncReviewState(ctx);
 	});
 
 	pi.on("session_switch", (_event, ctx) => {
-		applyReviewState(ctx);
+		syncReviewState(ctx);
 	});
 
 	pi.on("session_tree", (_event, ctx) => {
-		applyReviewState(ctx);
+		syncReviewState(ctx);
 	});
 
 	/**
@@ -861,10 +883,6 @@ export default function reviewExtension(pi: ExtensionAPI) {
 				ctx.ui.notify("Failed to determine review origin. Try again from a session with messages.", "error");
 				return;
 			}
-			reviewOriginId = originId;
-
-			// Keep a local copy so session_tree events during navigation don't wipe it
-			const lockedOriginId = originId;
 
 			// Find the first user message in the session
 			const entries = ctx.sessionManager.getEntries();
@@ -874,36 +892,31 @@ export default function reviewExtension(pi: ExtensionAPI) {
 
 			if (!firstUserMessage) {
 				ctx.ui.notify("No user message found in session", "error");
-				reviewOriginId = undefined;
 				return;
 			}
+
+			// Persist review state BEFORE navigation so that session_tree events
+			// fired during navigateTree() can restore it correctly via syncReviewState().
+			// Because getReviewState() uses getEntries() (all entries, not just current
+			// branch), the state survives the branch switch.
+			activateReview(ctx, originId);
 
 			// Navigate to first user message to create a new branch from that point
 			// Label it as "code-review" so it's visible in the tree
 			try {
 				const result = await ctx.navigateTree(firstUserMessage.id, { summarize: false, label: "code-review" });
 				if (result.cancelled) {
-					reviewOriginId = undefined;
+					deactivateReview(ctx);
 					return;
 				}
 			} catch (error) {
-				// Clean up state if navigation fails
-				reviewOriginId = undefined;
+				deactivateReview(ctx);
 				ctx.ui.notify(`Failed to start review: ${error instanceof Error ? error.message : String(error)}`, "error");
 				return;
 			}
 
-			// Restore origin after navigation events (session_tree can reset it)
-			reviewOriginId = lockedOriginId;
-
 			// Clear the editor (navigating to user message fills it with the message text)
 			ctx.ui.setEditorText("");
-
-			// Show widget indicating review is active
-			setReviewWidget(ctx, true);
-
-			// Persist review state so tree navigation can restore/reset it
-			pi.appendEntry(REVIEW_STATE_TYPE, { active: true, originId: lockedOriginId });
 		}
 
 		const prompt = await buildReviewPrompt(pi, target);
@@ -1144,20 +1157,22 @@ Preserve exact file paths, function names, and error messages.
 				return;
 			}
 
-			// Check if we're in a fresh session review
+			// Re-sync from entries in case the in-memory cache is stale
+			// (e.g., after tree navigation or session restore)
+			if (!reviewOriginId) {
+				syncReviewState(ctx);
+			}
+
 			if (!reviewOriginId) {
 				const state = getReviewState(ctx);
-				if (state?.active && state.originId) {
-					reviewOriginId = state.originId;
-				} else if (state?.active) {
-					setReviewWidget(ctx, false);
-					pi.appendEntry(REVIEW_STATE_TYPE, { active: false });
+				if (state?.active) {
+					// State says active but has no originId — corrupt state, clean up
+					deactivateReview(ctx);
 					ctx.ui.notify("Review state was missing origin info; cleared review status.", "warning");
 					return;
-				} else {
-					ctx.ui.notify("Not in a review branch (use /review first, or review was started in current session mode)", "info");
-					return;
 				}
+				ctx.ui.notify("Not in a review branch (use /review first, or review was started in current session mode)", "info");
+				return;
 			}
 
 			// Ask about summarization (Summarize is default/first option)
@@ -1205,9 +1220,7 @@ Preserve exact file paths, function names, and error messages.
 				}
 
 				// Clear state only on success
-				setReviewWidget(ctx, false);
-				reviewOriginId = undefined;
-				pi.appendEntry(REVIEW_STATE_TYPE, { active: false });
+				deactivateReview(ctx);
 
 				if (result.cancelled) {
 					ctx.ui.notify("Navigation cancelled", "info");
@@ -1232,9 +1245,7 @@ Preserve exact file paths, function names, and error messages.
 					}
 
 					// Clear state only on success
-					setReviewWidget(ctx, false);
-					reviewOriginId = undefined;
-					pi.appendEntry(REVIEW_STATE_TYPE, { active: false });
+					deactivateReview(ctx);
 					ctx.ui.notify("Review complete! Returned to original position.", "info");
 				} catch (error) {
 					// Keep state so they can try again

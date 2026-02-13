@@ -13,6 +13,8 @@
  *
  * Only activates when a pixi.toml or pixi-configured pyproject.toml is found
  * in the working directory. Falls through to default bash otherwise.
+ *
+ * Use `--no-pixi` flag to disable the interceptor.
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
@@ -24,18 +26,37 @@ import { isPixiProject } from "./lib/python-project.ts";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const interceptedCommandsPath = join(__dirname, "..", "pixi-intercepted-commands");
 
+const FLAG_NAME = "no-pixi";
+const STATUS_KEY = "pixi";
+
 export default function (pi: ExtensionAPI) {
 	const cwd = process.cwd();
 
 	if (!isPixiProject(cwd)) return;
 
+	pi.registerFlag(FLAG_NAME, {
+		description: "Disable pixi command interceptor for this session",
+		type: "boolean",
+		default: false,
+	});
+
 	const bashTool = createBashTool(cwd, {
 		commandPrefix: `export PATH="${interceptedCommandsPath}:$PATH"`,
 	});
 
+	const isEnabled = () => pi.getFlag(FLAG_NAME) !== true;
+
 	pi.on("session_start", (_event, ctx) => {
-		if (ctx.hasUI) ctx.ui.notify("Pixi interceptor loaded", "info");
+		if (!isEnabled()) return;
+		if (ctx.hasUI) {
+			ctx.ui.notify("Pixi interceptor loaded (--no-pixi to disable)", "info");
+			ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("dim", "pixi"));
+		}
 	});
 
-	pi.registerTool(bashTool);
+	// Only register the tool override when enabled. When disabled, the
+	// built-in bash tool remains untouched.
+	if (isEnabled()) {
+		pi.registerTool(bashTool);
+	}
 }

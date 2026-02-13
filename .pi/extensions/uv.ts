@@ -16,6 +16,8 @@
  *
  * The shim scripts are located in the intercepted-commands directory and
  * provide helpful error messages with the equivalent uv commands.
+ *
+ * Use `--no-uv` flag to disable the interceptor.
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
@@ -27,18 +29,37 @@ import { isUvProject } from "./lib/python-project.ts";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const interceptedCommandsPath = join(__dirname, "..", "intercepted-commands");
 
+const FLAG_NAME = "no-uv";
+const STATUS_KEY = "uv";
+
 export default function (pi: ExtensionAPI) {
 	const cwd = process.cwd();
 
 	if (!isUvProject(cwd)) return;
 
+	pi.registerFlag(FLAG_NAME, {
+		description: "Disable uv command interceptor for this session",
+		type: "boolean",
+		default: false,
+	});
+
 	const bashTool = createBashTool(cwd, {
 		commandPrefix: `export PATH="${interceptedCommandsPath}:$PATH"`,
 	});
 
+	const isEnabled = () => pi.getFlag(FLAG_NAME) !== true;
+
 	pi.on("session_start", (_event, ctx) => {
-		if (ctx.hasUI) ctx.ui.notify("UV interceptor loaded", "info");
+		if (!isEnabled()) return;
+		if (ctx.hasUI) {
+			ctx.ui.notify("UV interceptor loaded (--no-uv to disable)", "info");
+			ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("dim", "uv"));
+		}
 	});
 
-	pi.registerTool(bashTool);
+	// Only register the tool override when enabled. When disabled, the
+	// built-in bash tool remains untouched.
+	if (isEnabled()) {
+		pi.registerTool(bashTool);
+	}
 }
