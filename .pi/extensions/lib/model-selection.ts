@@ -8,7 +8,7 @@
 
 import type { Model, Api } from "@mariozechner/pi-ai";
 
-export const CODEX_MODEL_ID = "gpt-5.1-codex-mini";
+export const CODEX_MODEL_ID = "gpt-5.3-codex-spark";
 export const HAIKU_MODEL_ID = "claude-haiku-4-5";
 
 export interface ModelRegistry {
