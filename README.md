@@ -22,6 +22,7 @@ All skill files are in the [`skills`](skills) folder:
 * [`/frontend-design`](skills/frontend-design) - Claude Skill for designing and implementing distinctive frontend interfaces
 * [`/uv`](skills/uv) - Claude Skill for using `uv` for Python dependency management and script execution
 * [`/mermaid`](skills/mermaid) - Claude Skill for creating and validating Mermaid diagrams with the official Mermaid CLI
+* [`/svg`](skills/svg) - Claude Skill for creating and validating SVG files with clean structure and accessibility defaults
 
 ## PI Coding Agent Extensions
 
