@@ -1,8 +1,9 @@
 /**
  * Pixi Extension - Runtime Python interceptor routing.
  *
- * This extension always registers a `bash` override and decides at execution time
- * whether to route through pixi/uv intercept shims or plain bash.
+ * Coordinates with uv.ts via shared global state. The first extension that
+ * loads claims the single `bash` override; both extensions still register their
+ * own flags and contribute to routing decisions.
  *
  * Routing precedence:
  * 1) pixi interception (if pixi extension is enabled and project matches)
@@ -29,6 +30,7 @@ type SharedInterceptorState = {
 	runtimeMarker?: unknown;
 	isUvEnabled?: () => boolean;
 	isPixiEnabled?: () => boolean;
+	bashOwner?: "uv" | "pixi";
 };
 
 type GlobalWithPythonState = typeof globalThis & {
@@ -44,6 +46,13 @@ function getSharedState(runtimeMarker: unknown): SharedInterceptorState {
 		return next;
 	}
 	return existing;
+}
+
+function claimBashOverride(sharedState: SharedInterceptorState, owner: "uv" | "pixi"): boolean {
+	if (!sharedState.bashOwner) {
+		sharedState.bashOwner = owner;
+	}
+	return sharedState.bashOwner === owner;
 }
 
 function resolveInterceptorMode(cwd: string, sharedState: SharedInterceptorState): InterceptorMode {
@@ -72,6 +81,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	sharedState.isPixiEnabled = () => pi.getFlag(FLAG_NAME) !== true;
+	const ownsBashOverride = claimBashOverride(sharedState, "pixi");
 
 	const plainBash = createBashTool(cwd);
 	const uvBash = createBashTool(cwd, {
@@ -93,15 +103,17 @@ export default function (pi: ExtensionAPI) {
 		updateStatus(ctx, resolveInterceptorMode(cwd, sharedState));
 	});
 
-	pi.registerTool({
-		...plainBash,
-		async execute(toolCallId, params, signal, onUpdate, ctx) {
-			const mode = resolveInterceptorMode(cwd, sharedState);
-			if (ctx) {
-				updateStatus(ctx, mode);
-			}
-			const selectedBash = mode === "pixi" ? pixiBash : mode === "uv" ? uvBash : plainBash;
-			return selectedBash.execute(toolCallId, params, signal, onUpdate);
-		},
-	});
+	if (ownsBashOverride) {
+		pi.registerTool({
+			...plainBash,
+			async execute(toolCallId, params, signal, onUpdate, ctx) {
+				const mode = resolveInterceptorMode(cwd, sharedState);
+				if (ctx) {
+					updateStatus(ctx, mode);
+				}
+				const selectedBash = mode === "pixi" ? pixiBash : mode === "uv" ? uvBash : plainBash;
+				return selectedBash.execute(toolCallId, params, signal, onUpdate);
+			},
+		});
+	}
 }
