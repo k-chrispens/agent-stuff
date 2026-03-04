@@ -4,6 +4,9 @@
  * Minimal vim-style modal editing for the pi input editor.
  * Toggle with `/vim` command.
  *
+ * Optional experimental mode: `--vim-terminal-input` keeps the default editor and
+ * applies a small vim key subset via `ctx.ui.onTerminalInput(...)` interception.
+ *
  * Also seeds the editor with prompt history from the current working directory
  * (absorbs the functionality of cwd-history.ts to avoid setEditorComponent conflicts).
  *
@@ -659,6 +662,10 @@ function historiesMatch(a: PromptEntry[], b: PromptEntry[]): boolean {
 // =============================================================================
 
 let loadCounter = 0;
+const TERMINAL_INPUT_FLAG = "vim-terminal-input";
+const TERMINAL_STATUS_KEY = "vim";
+
+type TerminalVimMode = "insert" | "normal";
 
 function installVimEditor(
 	pi: ExtensionAPI,
@@ -709,13 +716,116 @@ function applyVimEditorWithHistory(pi: ExtensionAPI, ctx: ExtensionContext) {
 
 export default function (pi: ExtensionAPI) {
 	let enabled = true;
+	let terminalInputUnsubscribe: (() => void) | null = null;
+	let terminalMode: TerminalVimMode = "insert";
+
+	pi.registerFlag(TERMINAL_INPUT_FLAG, {
+		description: "Use experimental terminal-input vim mode instead of the custom editor",
+		type: "boolean",
+		default: false,
+	});
+
+	const useTerminalInputMode = () => pi.getFlag(TERMINAL_INPUT_FLAG) === true;
+
+	const updateTerminalStatus = (ctx: ExtensionContext) => {
+		if (!ctx.hasUI) return;
+		if (!enabled || !useTerminalInputMode()) {
+			ctx.ui.setStatus(TERMINAL_STATUS_KEY, undefined);
+			return;
+		}
+		const color = terminalMode === "normal" ? "accent" : "dim";
+		const label = terminalMode === "normal" ? "vim:NORMAL" : "vim:INSERT";
+		ctx.ui.setStatus(TERMINAL_STATUS_KEY, ctx.ui.theme.fg(color, label));
+	};
+
+	const clearTerminalInputMode = (ctx?: ExtensionContext) => {
+		if (terminalInputUnsubscribe) {
+			terminalInputUnsubscribe();
+			terminalInputUnsubscribe = null;
+		}
+		if (ctx?.hasUI) {
+			ctx.ui.setStatus(TERMINAL_STATUS_KEY, undefined);
+		}
+	};
+
+	const installTerminalInputMode = (ctx: ExtensionContext) => {
+		if (!ctx.hasUI) return;
+		clearTerminalInputMode(ctx);
+		terminalMode = "insert";
+		updateTerminalStatus(ctx);
+
+		terminalInputUnsubscribe = ctx.ui.onTerminalInput((data) => {
+			if (!enabled || !useTerminalInputMode()) return undefined;
+
+			if (matchesKey(data, "escape") || matchesKey(data, "ctrl+[")) {
+				if (terminalMode === "insert") {
+					terminalMode = "normal";
+					updateTerminalStatus(ctx);
+					return { consume: true };
+				}
+				return undefined;
+			}
+
+			if (terminalMode === "insert") {
+				return undefined;
+			}
+
+			if (isControlSequence(data)) {
+				return undefined;
+			}
+
+			const key = data.length === 1 ? data.toLowerCase() : data;
+			switch (key) {
+				case "i":
+					terminalMode = "insert";
+					updateTerminalStatus(ctx);
+					return { consume: true };
+				case "h":
+					return { data: "\x1b[D" };
+				case "j":
+					return { data: "\x1b[B" };
+				case "k":
+					return { data: "\x1b[A" };
+				case "l":
+					return { data: "\x1b[C" };
+				case "0":
+					return { data: "\x01" };
+				case "$":
+					return { data: "\x05" };
+				default:
+					return { consume: true };
+			}
+		});
+	};
+
+	const applyEnabledMode = (ctx: ExtensionContext) => {
+		if (!ctx.hasUI) return;
+		if (!enabled) {
+			clearTerminalInputMode(ctx);
+			ctx.ui.setEditorComponent(undefined);
+			return;
+		}
+
+		if (useTerminalInputMode()) {
+			ctx.ui.setEditorComponent(undefined);
+			installTerminalInputMode(ctx);
+			return;
+		}
+
+		clearTerminalInputMode(ctx);
+		applyVimEditorWithHistory(pi, ctx);
+	};
 
 	pi.on("session_start", (_event, ctx) => {
-		if (enabled) applyVimEditorWithHistory(pi, ctx);
+		applyEnabledMode(ctx);
 	});
 
 	pi.on("session_switch", (_event, ctx) => {
-		if (enabled) applyVimEditorWithHistory(pi, ctx);
+		applyEnabledMode(ctx);
+	});
+
+	pi.on("session_shutdown", () => {
+		clearTerminalInputMode();
 	});
 
 	pi.registerCommand("vim", {
@@ -724,12 +834,13 @@ export default function (pi: ExtensionAPI) {
 			if (!ctx.hasUI) return;
 			if (enabled) {
 				enabled = false;
-				ctx.ui.setEditorComponent(undefined);
+				applyEnabledMode(ctx);
 				ctx.ui.notify("Vim mode disabled", "info");
 			} else {
 				enabled = true;
-				applyVimEditorWithHistory(pi, ctx);
-				ctx.ui.notify("Vim mode enabled", "info");
+				applyEnabledMode(ctx);
+				const experimentalSuffix = useTerminalInputMode() ? " (experimental terminal input)" : "";
+				ctx.ui.notify(`Vim mode enabled${experimentalSuffix}`, "info");
 			}
 		},
 	});

@@ -215,7 +215,14 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "read_pdf",
 		label: "Read PDF",
-		description: `Read a PDF file, extracting text content and embedded figures/images. Text is returned as plain text per page. Figures above a minimum size are returned as images (up to ${MAX_EXTRACTED_IMAGES}). Supports optional page range selection. Text output is truncated to ${DEFAULT_MAX_LINES} lines or ${formatSize(DEFAULT_MAX_BYTES)}.`,
+		description: "Read a PDF file and extract page text plus optional figures.",
+		promptSnippet:
+			`Extract PDF text by page and optionally return embedded figures (up to ${MAX_EXTRACTED_IMAGES} images).`,
+		promptGuidelines: [
+			"Use startPage/endPage to limit extraction scope on large PDFs.",
+			"Set includeImages=false for text-only extraction to reduce token usage.",
+			`Expect text truncation at ${DEFAULT_MAX_LINES} lines or ${formatSize(DEFAULT_MAX_BYTES)} of output.`,
+		],
 		parameters: Type.Object({
 			path: Type.String({ description: "Path to the PDF file" }),
 			startPage: Type.Optional(

@@ -240,7 +240,11 @@ export default function loopExtension(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "signal_loop_success",
 		label: "Signal Loop Success",
-		description: "Stop the active loop when the breakout condition is satisfied. Only call this tool when explicitly instructed to do so by the user, tool or system prompt.",
+		description: "Signal that the active loop breakout condition is satisfied.",
+		promptSnippet: "Stop the active /loop when its breakout condition has been met.",
+		promptGuidelines: [
+			"Call this tool only when the user or loop instructions explicitly ask for breakout signaling.",
+		],
 		parameters: Type.Object({}),
 		async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
 			if (!loopState.active) {
@@ -256,6 +260,18 @@ export default function loopExtension(pi: ExtensionAPI): void {
 				content: [{ type: "text", text: "Loop ended." }],
 				details: { active: false },
 			};
+		},
+		renderCall() {
+			return undefined;
+		},
+		renderResult(result) {
+			const textBlock = result.content.find(
+				(content): content is { type: "text"; text: string } => content.type === "text",
+			);
+			if (textBlock?.text === "Loop ended.") {
+				return undefined;
+			}
+			return new Text(textBlock?.text ?? "", 0, 0);
 		},
 	});
 

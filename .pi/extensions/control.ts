@@ -532,25 +532,14 @@ function registerSessionTool(pi: ExtensionAPI, state: SocketState): void {
 	pi.registerTool({
 		name: "send_to_session",
 		label: "Send To Session",
-		description: `Interact with another running pi session via its control socket.
-
-Actions:
-- send: Send a message (default). Requires 'message' parameter.
-- get_message: Get the most recent assistant message.
-- get_summary: Get a summary of activity since the last user prompt.
-- clear: Rewind session to initial state.
-
-Target selection:
-- sessionId: UUID of the session.
-- sessionName: session name (alias from /name).
-
-Wait behavior (only for action=send):
-- wait_until=turn_end: Wait for the turn to complete, returns last assistant message.
-- wait_until=message_processed: Returns immediately after message is queued.
-
-Note: If you ask the target session to reply back via sender_info, do not use wait_until; waiting is redundant and can duplicate responses.
-
-Messages automatically include sender session info for replies. When you want a response, instruct the target session to reply directly to the sender by calling send_to_session with the sender_info reference (do not poll get_message).`,
+		description: "Interact with another running pi session via its control socket.",
+		promptSnippet:
+			"Send messages to another session, fetch its latest message/summary, or clear it by session id/name.",
+		promptGuidelines: [
+			"For action=send, include message. wait_until=turn_end waits for completion; wait_until=message_processed only confirms enqueue.",
+			"When asking the target to reply, include sender_info and do not also poll with get_message.",
+			"Provide either sessionId or sessionName (alias from /name) to target a session.",
+		],
 		parameters: Type.Object({
 			sessionId: Type.Optional(Type.String({ description: "Target session id (UUID)" })),
 			sessionName: Type.Optional(Type.String({ description: "Target session name (alias)" })),
@@ -922,7 +911,9 @@ function registerListSessionsTool(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "list_sessions",
 		label: "List Sessions",
-		description: "List live sessions that expose a control socket (optionally with session names).",
+		description: "List live sessions that expose a control socket.",
+		promptSnippet: "List live sessions that can be targeted by send_to_session.",
+		promptGuidelines: ["Use this tool to discover valid session ids/names before targeting another session."],
 		parameters: Type.Object({}),
 		async execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
 			const sessions = await getLiveSessions();
