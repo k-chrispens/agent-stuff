@@ -80,6 +80,14 @@ else
     echo "             install jq or manually add extensions to $PI_SETTINGS"
 fi
 
+# ---------------------------------------------------------------------------
+# Install npm dependencies for project-local extensions
+# ---------------------------------------------------------------------------
+if [ -f "$SCRIPT_DIR/.pi/extensions/package.json" ]; then
+    echo "  npm install .pi/extensions/"
+    (cd "$SCRIPT_DIR/.pi/extensions" && npm install --silent)
+fi
+
 echo ""
 
 # ---------------------------------------------------------------------------
