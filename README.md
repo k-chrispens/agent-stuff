@@ -34,12 +34,53 @@ Custom extensions for the PI Coding Agent can be found in the [`pi-extensions`](
 * [`cwd-history.ts`](pi-extensions/cwd-history.ts) - Displays and manages recent working directory history inside the PI Coding Agent.
 * [`files.ts`](pi-extensions/files.ts) - Unified file browser that merges git status (dirty first) with session references, plus reveal/open/edit and diff actions.
 * [`loop.ts`](pi-extensions/loop.ts) - Runs a prompt loop for rapid iterative coding with optional auto-continue control.
-* [`notify.ts`](pi-extensions/notify.ts) - Sends native desktop notifications when the agent finishes (OSC 777 compatible terminals).
+* [`notify.ts`](pi-extensions/notify.ts) - Sends native desktop notifications when the agent finishes (Windows toast, Kitty OSC 99, OSC 777), with optional webhook fallback for remote/headless use.
 * [`review.ts`](pi-extensions/review.ts) - Code review command inspired by Codex. Supports reviewing uncommitted changes, against a base branch (PR style), specific commits, or with custom instructions. Includes Ctrl+R shortcut.
 * [`session-breakdown.ts`](pi-extensions/session-breakdown.ts) - Interactive TUI to analyze the last 7/30/90 days of Pi session usage (sessions + cost by model) with a GitHub-style usage graph.
 * [`todos.ts`](pi-extensions/todos.ts) - Todo manager extension with file-backed storage and a TUI for listing and editing todos.
 * [`uv.ts`](pi-extensions/uv.ts) - Helpers for working with uv (Python packaging/workflows).
 * [`whimsical.ts`](pi-extensions/whimsical.ts) - Replaces the default "Thinking..." message with random whimsical phrases like "Reticulating splines...", "Consulting the void...", or "Bribing the compiler...".
+
+### Notify webhook fallback setup (remote/headless)
+
+Set these environment variables before starting Pi. The notify extension auto-detects Slack/ntfy/Pushover URLs when `PI_NOTIFY_WEBHOOK_KIND` is unset or `auto`.
+
+```bash
+# Common options (optional)
+export PI_NOTIFY_WEBHOOK_TIMEOUT_MS=5000
+export PI_NOTIFY_WEBHOOK_ALWAYS=1  # send webhook even if terminal notifications succeed
+```
+
+#### Slack incoming webhook
+
+```bash
+export PI_NOTIFY_WEBHOOK_URL="https://hooks.slack.com/services/T000/B000/XXXX"
+export PI_NOTIFY_WEBHOOK_KIND=slack
+export PI_NOTIFY_SLACK_USERNAME="Pi"
+export PI_NOTIFY_SLACK_ICON_EMOJI=":robot_face:"
+```
+
+#### ntfy
+
+```bash
+export PI_NOTIFY_WEBHOOK_URL="https://ntfy.sh/your-topic"
+export PI_NOTIFY_WEBHOOK_KIND=ntfy
+# Optional for private topics:
+export PI_NOTIFY_WEBHOOK_BEARER_TOKEN="tk_xxxxxxxxxx"
+```
+
+#### Pushover
+
+```bash
+export PI_NOTIFY_WEBHOOK_URL="https://api.pushover.net/1/messages.json"
+export PI_NOTIFY_WEBHOOK_KIND=pushover
+export PI_NOTIFY_PUSHOVER_TOKEN="your-app-token"
+export PI_NOTIFY_PUSHOVER_USER="your-user-key"
+# Optional:
+export PI_NOTIFY_PUSHOVER_PRIORITY=0
+```
+
+For custom endpoints, leave `PI_NOTIFY_WEBHOOK_KIND` as `auto`/unset (or set `generic`) to send a JSON payload with `title`, `body`, `channel`, `timestamp`, `host`, and `cwd`.
 
 ## PI Coding Agent Themes
 

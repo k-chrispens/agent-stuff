@@ -4,6 +4,9 @@ All notable changes to agent-stuff are documented here.
 
 ## Unreleased
 
+* Added notify extension fallback channels for Kitty (OSC 99), Windows toast, and webhook delivery for remote/headless sessions.
+* Added notify webhook setup examples for Slack, ntfy, and Pushover in the README.
+
 ## 1.2.0
 
 * Updated pi-extensions to use the new `ToolDefinition.execute` parameter order.
