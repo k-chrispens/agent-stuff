@@ -1,10 +1,16 @@
 import { readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export const SETTINGS_PATH = join(homedir(), ".pi", "agent", "settings.json");
+export const LOCAL_PROMPTS_DIR = join(__dirname, "prompts");
 
 export const DEFAULT_MAX_ITERATIONS = 7;
+export type ReviewInterruptBehavior = "pause" | "stop";
+export const DEFAULT_INTERRUPT_BEHAVIOR: ReviewInterruptBehavior = "pause";
 
 export const DEFAULT_REVIEW_PROMPT = `Great, now I want you to carefully read over all of the new code you just wrote and other existing code with "fresh eyes," looking super carefully for any obvious bugs, errors, problems, issues, confusion, etc. Also, if you notice any pre-existing issues/bugs those should be addressed.
 
@@ -74,6 +80,7 @@ export interface ReviewerLoopSettingsRaw {
   reviewPrompt?: string;
   autoTrigger?: boolean;
   freshContext?: boolean;
+  interruptBehavior?: ReviewInterruptBehavior;
   triggerPatterns?: PatternConfig;
   exitPatterns?: PatternConfig;
   issuesFixedPatterns?: PatternConfig;
@@ -84,6 +91,7 @@ export interface ReviewerLoopSettings {
   reviewPromptConfig: ReviewPromptConfig;
   autoTrigger: boolean;
   freshContext: boolean;
+  interruptBehavior: ReviewInterruptBehavior;
   triggerPatterns: RegExp[];
   exitPatterns: RegExp[];
   issuesFixedPatterns: RegExp[];
@@ -105,17 +113,14 @@ function parsePattern(input: unknown): RegExp | null {
   return new RegExp(escaped, "i");
 }
 
-function loadPatterns(
-  config: PatternConfig | undefined,
-  defaults: RegExp[]
-): RegExp[] {
+function loadPatterns(config: PatternConfig | undefined, defaults: RegExp[]): RegExp[] {
   if (!config?.patterns || !Array.isArray(config.patterns) || config.patterns.length === 0) {
     return defaults;
   }
 
   const userPatterns = config.patterns
     .map(parsePattern)
-    .filter((p): p is RegExp => p !== null);
+    .filter((pattern): pattern is RegExp => pattern !== null);
 
   if (config.mode === "replace") {
     return userPatterns.length > 0 ? userPatterns : defaults;
@@ -140,8 +145,7 @@ function parseReviewPromptConfig(value: string | undefined): ReviewPromptConfig 
   }
 
   if (value.startsWith("template:")) {
-    const templateName = value.slice("template:".length).trim();
-    return { type: "template", value: templateName };
+    return { type: "template", value: value.slice("template:".length).trim() };
   }
 
   if (isFilePath(value)) {
@@ -163,6 +167,17 @@ function resolvePath(value: string): string {
   return value;
 }
 
+function parseInterruptBehavior(value: unknown): ReviewInterruptBehavior {
+  return value === "stop" ? "stop" : DEFAULT_INTERRUPT_BEHAVIOR;
+}
+
+function getTemplateCandidatePaths(name: string): string[] {
+  return [
+    join(homedir(), ".pi", "agent", "prompts", `${name}.md`),
+    join(LOCAL_PROMPTS_DIR, `${name}.md`),
+  ];
+}
+
 export function getReviewPrompt(config: ReviewPromptConfig): string {
   switch (config.type) {
     case "inline":
@@ -179,24 +194,18 @@ export function getReviewPrompt(config: ReviewPromptConfig): string {
     }
 
     case "template": {
-      const templatePath = join(
-        homedir(),
-        ".pi",
-        "agent",
-        "prompts",
-        `${config.value}.md`
-      );
-      try {
-        if (!existsSync(templatePath)) {
-          return DEFAULT_REVIEW_PROMPT;
+      for (const templatePath of getTemplateCandidatePaths(config.value)) {
+        try {
+          if (!existsSync(templatePath)) continue;
+          let content = readFileSync(templatePath, "utf-8");
+          content = stripFrontmatter(content);
+          content = content.replace(/\$@/g, "").trim();
+          if (content) return content;
+        } catch {
+          // Try next candidate
         }
-        let content = readFileSync(templatePath, "utf-8");
-        content = stripFrontmatter(content);
-        content = content.replace(/\$@/g, "").trim();
-        return content || DEFAULT_REVIEW_PROMPT;
-      } catch {
-        return DEFAULT_REVIEW_PROMPT;
       }
+      return DEFAULT_REVIEW_PROMPT;
     }
   }
 }
@@ -209,7 +218,7 @@ export function loadSettings(): ReviewerLoopSettings {
     const parsed = JSON.parse(content);
     raw = parsed?.reviewerLoop ?? {};
   } catch {
-    // Use all defaults
+    // Use defaults
   }
 
   return {
@@ -220,11 +229,9 @@ export function loadSettings(): ReviewerLoopSettings {
     reviewPromptConfig: parseReviewPromptConfig(raw.reviewPrompt),
     autoTrigger: raw.autoTrigger === true,
     freshContext: raw.freshContext === true,
+    interruptBehavior: parseInterruptBehavior(raw.interruptBehavior),
     triggerPatterns: loadPatterns(raw.triggerPatterns, DEFAULT_TRIGGER_PATTERNS),
     exitPatterns: loadPatterns(raw.exitPatterns, DEFAULT_EXIT_PATTERNS),
-    issuesFixedPatterns: loadPatterns(
-      raw.issuesFixedPatterns,
-      DEFAULT_ISSUES_FIXED_PATTERNS
-    ),
+    issuesFixedPatterns: loadPatterns(raw.issuesFixedPatterns, DEFAULT_ISSUES_FIXED_PATTERNS),
   };
 }

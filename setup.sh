@@ -47,7 +47,7 @@ link "$SCRIPT_DIR/global/extensions" "$PI_AGENT_DIR/extensions"
 link "$SCRIPT_DIR/skills" "$PI_AGENT_DIR/skills"
 
 # ---------------------------------------------------------------------------
-# ~/.pi/agent/settings.json — merge extensions, preserve everything else
+# ~/.pi/agent/settings.json — merge extensions and remove deprecated pi-review-loop package
 # ---------------------------------------------------------------------------
 # Auto-discover all .ts extensions in .pi/extensions/
 AGENT_STUFF_EXTENSIONS=()
@@ -71,7 +71,15 @@ if command -v jq &>/dev/null; then
     existing=$(jq -r '.extensions // []' "$PI_SETTINGS")
     merged=$(echo "$existing" | jq --arg repo "$SCRIPT_DIR" '[.[] | select(startswith($repo) | not)]' | jq --argjson new "$ext_json" '. + $new | unique')
 
-    jq --argjson exts "$merged" '.extensions = $exts | .enableSkillCommands = true' \
+    jq --argjson exts "$merged" '
+        .extensions = $exts
+        | .enableSkillCommands = true
+        | .packages = ((.packages // []) | map(select(
+            . != "npm:pi-review-loop"
+            and . != "pi-review-loop"
+            and ((type != "object") or ((.source // "") != "npm:pi-review-loop" and (.source // "") != "pi-review-loop"))
+        )))
+    ' \
         "$PI_SETTINGS" > "$PI_SETTINGS.tmp" && mv "$PI_SETTINGS.tmp" "$PI_SETTINGS"
 
     echo "  merged     $PI_SETTINGS ($(echo "$merged" | jq -r 'length') extensions)"
