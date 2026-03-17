@@ -858,6 +858,11 @@ export default function (pi: ExtensionAPI) {
     name: "review_loop",
     description:
       "Control the automated code review loop. Start, pause, resume, or stop review mode, adjust settings, or check status.",
+    promptSnippet:
+      "Control the automated code review loop. Start/stop review mode, toggle auto-trigger, or check status. When started, the loop repeatedly prompts for code review until 'No issues found' or max iterations reached.",
+    promptGuidelines: [
+      "When started, the loop repeatedly prompts for code review until 'No issues found' or max iterations reached.",
+    ],
     parameters: Type.Object({
       start: Type.Optional(
         Type.Boolean({
@@ -912,7 +917,7 @@ export default function (pi: ExtensionAPI) {
       ),
     }),
 
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
       if (typeof params.maxIterations === "number" && params.maxIterations >= 1) {
         state = {
           ...state,

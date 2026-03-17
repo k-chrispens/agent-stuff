@@ -822,7 +822,7 @@ export default function todosExtension(pi: ExtensionAPI) {
 		],
 		parameters: TodoParams,
 
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			const todosDir = getTodosDir(ctx.cwd);
 			const action: TodoAction = params.action;
 

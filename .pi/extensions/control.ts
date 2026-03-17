@@ -562,7 +562,7 @@ function registerSessionTool(pi: ExtensionAPI, state: SocketState): void {
 				}),
 			),
 		}),
-		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			const action = params.action ?? "send";
 			const sessionName = params.sessionName?.trim();
 			const sessionId = params.sessionId?.trim();
@@ -915,7 +915,7 @@ function registerListSessionsTool(pi: ExtensionAPI): void {
 		promptSnippet: "List live sessions that can be targeted by send_to_session.",
 		promptGuidelines: ["Use this tool to discover valid session ids/names before targeting another session."],
 		parameters: Type.Object({}),
-		async execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
+		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			const sessions = await getLiveSessions();
 
 			if (sessions.length === 0) {

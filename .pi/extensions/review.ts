@@ -46,7 +46,7 @@ function setReviewWidget(ctx: ExtensionContext, active: boolean) {
 		return;
 	}
 
-	ctx.ui.setWidget("review", (_tui, theme) => {
+	ctx.ui.setWidget("review", (tui, theme) => {
 		const text = new Text(theme.fg("warning", "Review session active, return with /end-review"), 0, 0);
 		return {
 			render(width: number) {
@@ -526,15 +526,15 @@ export default function reviewExtension(pi: ExtensionAPI) {
 		setReviewWidget(ctx, false);
 	}
 
-	pi.on("session_start", (_event, ctx) => {
+	pi.on("session_start", (event, ctx) => {
 		syncReviewState(ctx);
 	});
 
-	pi.on("session_switch", (_event, ctx) => {
+	pi.on("session_switch", (event, ctx) => {
 		syncReviewState(ctx);
 	});
 
-	pi.on("session_tree", (_event, ctx) => {
+	pi.on("session_tree", (event, ctx) => {
 		syncReviewState(ctx);
 	});
 

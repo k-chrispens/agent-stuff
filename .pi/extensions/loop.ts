@@ -246,7 +246,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
 			"Call this tool only when the user or loop instructions explicitly ask for breakout signaling.",
 		],
 		parameters: Type.Object({}),
-		async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+		async execute(toolCallId, params, signal, onUpdate, ctx) {
 			if (!loopState.active) {
 				return {
 					content: [{ type: "text", text: "No active loop is running." }],
@@ -360,11 +360,11 @@ export default function loopExtension(pi: ExtensionAPI): void {
 		updateStatus(ctx, loopState);
 	}
 
-	pi.on("session_start", async (_event, ctx) => {
+	pi.on("session_start", async (event, ctx) => {
 		await restoreLoopState(ctx);
 	});
 
-	pi.on("session_switch", async (_event: SessionSwitchEvent, ctx) => {
+	pi.on("session_switch", async (event: SessionSwitchEvent, ctx) => {
 		await restoreLoopState(ctx);
 	});
 }
