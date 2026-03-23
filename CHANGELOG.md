@@ -4,6 +4,11 @@ All notable changes to agent-stuff are documented here.
 
 ## Unreleased
 
+* Migrated extensions for pi 0.62.0 breaking changes:
+  - Replaced `getEditorKeybindings()` with `getKeybindings()` in todos and files extensions.
+  - Updated all keybinding IDs to namespaced format (e.g. `"selectConfirm"` → `"tui.select.confirm"`, `"expandTools"` → `"app.tools.expand"`).
+  - Fixed `renderCall`/`renderResult` in loop extension to return empty `Container` instead of `undefined`.
+  - Updated command provenance access from `c.path` to `c.sourceInfo.path` in context extension.
 * Added notify extension fallback channels for Kitty (OSC 99), Windows toast, and webhook delivery for remote/headless sessions.
 * Added notify webhook setup examples for Slack, ntfy, and Pushover in the README.
 

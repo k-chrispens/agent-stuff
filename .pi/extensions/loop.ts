@@ -262,14 +262,14 @@ export default function loopExtension(pi: ExtensionAPI): void {
 			};
 		},
 		renderCall() {
-			return undefined;
+			return new Container();
 		},
 		renderResult(result) {
 			const textBlock = result.content.find(
 				(content): content is { type: "text"; text: string } => content.type === "text",
 			);
 			if (textBlock?.text === "Loop ended.") {
-				return undefined;
+				return new Container();
 			}
 			return new Text(textBlock?.text ?? "", 0, 0);
 		},
