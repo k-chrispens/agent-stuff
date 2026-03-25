@@ -14,7 +14,7 @@
  *   Movement:  h j k l  w b e  0 $ ^  gg G
  *   Enter insert:  i I a A o O
  *   Editing:  x dd D C cc/S r p u
- *   Operators:  d/c/y + w/b/$/0
+ *   Operators:  d/c/y + w/e/b/$/0
  *   Yank:  yy
  *
  * Insert mode: all keys pass through normally.
@@ -194,6 +194,16 @@ class VimEditor extends CustomEditor {
 
 		switch (motion) {
 			case "w": {
+				const to = this.nextWordStart();
+				if (op === "y") {
+					this.register = this.curLine.slice(c, to);
+				} else {
+					this.deleteRange(c, to);
+					if (op === "c") this.mode = "insert";
+				}
+				break;
+			}
+			case "e": {
 				const to = this.wordEnd();
 				if (op === "y") {
 					this.register = this.curLine.slice(c, to);
@@ -237,9 +247,14 @@ class VimEditor extends CustomEditor {
 			case "y": {
 				if (op === "y") {
 					this.register = (this.getLines()[this.lineIdx] ?? "") + "\n";
-				} else {
+				} else if (op === "d") {
 					this.deleteLines(1);
-					if (op === "c") this.mode = "insert";
+				} else {
+					// cc: save line (linewise), clear content, keep the line, enter insert
+					this.register = (this.getLines()[this.lineIdx] ?? "") + "\n";
+					this.emitRaw("\x01"); // home
+					this.emitRaw("\x0b"); // kill to end
+					this.mode = "insert";
 				}
 				break;
 			}
@@ -310,7 +325,7 @@ class VimEditor extends CustomEditor {
 
 		// Pending: operator awaiting motion
 		if (this.pending === "d" || this.pending === "c" || this.pending === "y") {
-			if ("wb$0".includes(data) || data === this.pending) {
+			if ("wbe$0".includes(data) || data === this.pending) {
 				this.handleOperator(this.pending, data);
 			} else {
 				this.pending = null;
@@ -339,14 +354,8 @@ class VimEditor extends CustomEditor {
 				if (delta > 0) this.emitRaw("\x1b[D", delta);
 				break;
 			}
-			case "e": { // end of word (character-level scan with WORD_RE)
-				const line = this.curLine;
-				let i = this.col + 1;
-				while (i < line.length && !WORD_RE.test(line[i]!)) i++;
-				while (i < line.length && WORD_RE.test(line[i]!)) i++;
-				// i is one past end of word; land ON the last word char
-				const target = Math.min(i - 1, line.length - 1);
-				const delta = target - this.col;
+			case "e": { // end of word — land ON the last word char
+				const delta = this.wordEnd() - 1 - this.col;
 				if (delta > 0) this.emitRaw("\x1b[C", delta);
 				break;
 			}
@@ -401,8 +410,9 @@ class VimEditor extends CustomEditor {
 				this.mode = "insert";
 				break;
 			case "S":
+				this.register = this.curLine + "\n";
 				this.emitRaw("\x01"); // home
-				this.deleteToEnd();
+				this.emitRaw("\x0b"); // kill to end
 				this.mode = "insert";
 				break;
 			case "r":
@@ -418,8 +428,10 @@ class VimEditor extends CustomEditor {
 					if (leadingSpaces > 0) {
 						this.emitRaw("\x1b[3~", leadingSpaces);
 					}
-					// Ensure there's a space separator
-					if (this.col < this.curLine.length && this.curLine[this.col] !== " ") {
+					// Ensure there's a space separator at the join seam,
+					// but not if either side already has one or the first line was empty
+					if (this.col > 0 && this.col < this.curLine.length &&
+						this.curLine[this.col - 1] !== " " && this.curLine[this.col] !== " ") {
 						this.insertTextAtCursor(" ");
 					}
 				}
