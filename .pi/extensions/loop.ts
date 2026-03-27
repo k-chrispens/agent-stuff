@@ -329,15 +329,15 @@ export default function loopExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_before_compact", async (event, ctx) => {
 		if (!loopState.active || !loopState.mode || !ctx.model) return;
-		const apiKey = await ctx.modelRegistry.getApiKey(ctx.model);
-		if (!apiKey) return;
+		const auth = await ctx.modelRegistry.getApiKeyAndHeaders(ctx.model);
+		if (!auth.ok) return;
 
 		const instructionParts = [event.customInstructions, getCompactionInstructions(loopState.mode, loopState.condition)]
 			.filter(Boolean)
 			.join("\n\n");
 
 		try {
-			const compaction = await compact(event.preparation, ctx.model, apiKey, instructionParts, event.signal);
+			const compaction = await compact(event.preparation, ctx.model, auth.apiKey!, auth.headers, instructionParts, event.signal);
 			return { compaction };
 		} catch (error: unknown) {
 			const message = error instanceof Error ? error.message : String(error);

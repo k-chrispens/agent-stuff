@@ -207,8 +207,8 @@ async function handleCommand(
 			return;
 		}
 
-		const apiKey = await ctx.modelRegistry.getApiKey(model);
-		if (!apiKey) {
+		const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+		if (!auth.ok) {
 			respond(false, "get_summary", undefined, "No API key available for summarization model");
 			return;
 		}
@@ -227,7 +227,7 @@ async function handleCommand(
 			const response = await complete(
 				model,
 				{ systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: [userMessage] },
-				{ apiKey },
+				{ apiKey: auth.apiKey, headers: auth.headers },
 			);
 
 			if (response.stopReason === "aborted" || response.stopReason === "error") {
