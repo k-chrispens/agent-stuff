@@ -19,7 +19,8 @@ That script:
 - merges this repo's project-local extensions from `.pi/extensions/` into Pi settings
 - installs npm dependencies for `.pi/extensions/`
 - removes the deprecated `npm:pi-review-loop` package entry so the bundled repo version is used instead
-- links `global/CLAUDE.md` into `~/.claude/CLAUDE.md` when Claude Code is installed
+- links `global/CLAUDE.md` into `~/.claude/CLAUDE.md` when Claude Code or Amp is installed
+- links individual skills into `~/.claude/skills/` when Amp is installed
 
 ## Repository layout
 
@@ -37,7 +38,10 @@ Available skills in [`skills`](skills):
 - [`/commit`](skills/commit) - create clean Conventional Commit messages
 - [`/github`](skills/github) - interact with GitHub through the `gh` CLI
 - [`/github-issues`](skills/github-issues) - structured issue triage and implementation workflow using worktrees
+- [`/learning-mode`](skills/learning-mode) - structured AI-assisted learning workflow
 - [`/mermaid`](skills/mermaid) - create and validate Mermaid diagrams
+- [`/native-web-search`](skills/native-web-search) - web search via Anthropic or OpenAI Codex models with source URLs
+- [`/pymol-pml-scripting`](skills/pymol-pml-scripting) - generate correct PyMOL `.pml` scripts for molecular visualization
 - [`/svg`](skills/svg) - create and validate SVG files
 - [`/tmux`](skills/tmux) - drive tmux sessions programmatically
 - [`/uv`](skills/uv) - use `uv` for Python environments, dependencies, and scripts
