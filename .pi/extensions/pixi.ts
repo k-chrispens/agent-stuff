@@ -99,10 +99,6 @@ export default function (pi: ExtensionAPI) {
 		}
 	});
 
-	pi.on("session_switch", (_event, ctx) => {
-		updateStatus(ctx, resolveInterceptorMode(cwd, sharedState));
-	});
-
 	if (ownsBashOverride) {
 		pi.registerTool({
 			...plainBash,

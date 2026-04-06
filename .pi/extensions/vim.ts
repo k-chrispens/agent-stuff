@@ -832,10 +832,6 @@ export default function (pi: ExtensionAPI) {
 		applyEnabledMode(ctx);
 	});
 
-	pi.on("session_switch", (_event, ctx) => {
-		applyEnabledMode(ctx);
-	});
-
 	pi.on("session_shutdown", () => {
 		clearTerminalInputMode();
 	});

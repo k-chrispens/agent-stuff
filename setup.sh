@@ -96,6 +96,14 @@ if [ -f "$SCRIPT_DIR/.pi/extensions/package.json" ]; then
     (cd "$SCRIPT_DIR/.pi/extensions" && npm install --silent)
 fi
 
+# Install npm dependencies for subdirectory extensions with their own package.json
+for subpkg in "$SCRIPT_DIR/.pi/extensions/"*/package.json; do
+    [ -f "$subpkg" ] || continue
+    dir="$(dirname "$subpkg")"
+    echo "  npm install .pi/extensions/$(basename "$dir")/"
+    (cd "$dir" && npm install --silent)
+done
+
 echo ""
 
 # ---------------------------------------------------------------------------

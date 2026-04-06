@@ -530,10 +530,6 @@ export default function reviewExtension(pi: ExtensionAPI) {
 		syncReviewState(ctx);
 	});
 
-	pi.on("session_switch", (event, ctx) => {
-		syncReviewState(ctx);
-	});
-
 	pi.on("session_tree", (event, ctx) => {
 		syncReviewState(ctx);
 	});

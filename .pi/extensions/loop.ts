@@ -7,7 +7,7 @@
  */
 
 import { Type } from "@sinclair/typebox";
-import type { ExtensionAPI, ExtensionContext, SessionSwitchEvent, AgentEndEvent } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, AgentEndEvent } from "@mariozechner/pi-coding-agent";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { compact } from "@mariozechner/pi-coding-agent";
 import { Container, type SelectItem, SelectList, Text } from "@mariozechner/pi-tui";
@@ -361,10 +361,6 @@ export default function loopExtension(pi: ExtensionAPI): void {
 	}
 
 	pi.on("session_start", async (event, ctx) => {
-		await restoreLoopState(ctx);
-	});
-
-	pi.on("session_switch", async (event: SessionSwitchEvent, ctx) => {
 		await restoreLoopState(ctx);
 	});
 }
