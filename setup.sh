@@ -116,21 +116,29 @@ if command -v claude &>/dev/null || command -v amp &>/dev/null || [ -d "$CLAUDE_
 fi
 
 # ---------------------------------------------------------------------------
-# Amp: ~/.claude/skills/<name> -> repo skills/<name> (for each skill)
-# Amp discovers skills by scanning ~/.claude/skills/ for SKILL.md files.
+# Claude Code / Amp: ~/.claude/skills/<name> -> repo skills/<name> (per skill)
+#
+# Both Claude Code and Amp discover skills by scanning ~/.claude/skills/ for
+# SKILL.md files. In Claude Code each becomes a /<name> slash command.
+#
+# link() only touches names that match directories under ./skills/, so any
+# unrelated skill in ~/.claude/skills/ (e.g. claudeception) is left alone.
 # ---------------------------------------------------------------------------
-if command -v amp &>/dev/null || [ -d "$CLAUDE_DIR/skills" ]; then
-    AMP_SKILLS_DIR="$CLAUDE_DIR/skills"
-    mkdir -p "$AMP_SKILLS_DIR"
+if command -v claude &>/dev/null || command -v amp &>/dev/null || [ -d "$CLAUDE_DIR" ]; then
+    CLAUDE_SKILLS_DIR="$CLAUDE_DIR/skills"
+    mkdir -p "$CLAUDE_SKILLS_DIR"
     shopt -s nullglob
     for skill_dir in "$SCRIPT_DIR/skills/"*/; do
         [ -f "$skill_dir/SKILL.md" ] || continue
         skill_name="$(basename "$skill_dir")"
-        link "${skill_dir%/}" "$AMP_SKILLS_DIR/$skill_name"
-        # Remove .bak left by link() — its SKILL.md shadows our symlink in amp
-        if [ -d "$AMP_SKILLS_DIR/$skill_name.bak" ]; then
-            rm -rf "$AMP_SKILLS_DIR/$skill_name.bak"
-            echo "  cleaned    $AMP_SKILLS_DIR/$skill_name.bak"
+        link "${skill_dir%/}" "$CLAUDE_SKILLS_DIR/$skill_name"
+        # Amp-specific: its loader picks up SKILL.md from *.bak directories,
+        # which would shadow our symlink. Only clean up .bak when Amp is
+        # installed, so Claude-only machines never silently delete a
+        # user-owned skill that happened to collide with a repo skill name.
+        if command -v amp &>/dev/null && [ -d "$CLAUDE_SKILLS_DIR/$skill_name.bak" ]; then
+            rm -rf "$CLAUDE_SKILLS_DIR/$skill_name.bak"
+            echo "  cleaned    $CLAUDE_SKILLS_DIR/$skill_name.bak"
         fi
     done
     shopt -u nullglob
@@ -181,7 +189,7 @@ for f in "$PI_AGENT_DIR/skills/"*/; do
     echo "  $(basename "$f")"
 done
 echo ""
-echo "Skills (amp):"
+echo "Skills (Claude Code / Amp):"
 for f in "$CLAUDE_DIR/skills/"*/; do
     [ -L "${f%/}" ] && [ -f "$f/SKILL.md" ] || continue
     echo "  $(basename "$f")"

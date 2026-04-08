@@ -10,3 +10,7 @@
 ## Extensions
 
 Pi extensions live in `.pi/extensions/` (the standard auto-discovery path). When working in this repo, add or update extensions there. You can consult the `pi-mono` for reference, but do not modify code in `pi-mono`.
+
+## Skills
+
+Skills live in `skills/` and are shared between pi and Claude Code. `./setup.sh` symlinks them into both `~/.pi/agent/skills/` (for pi) and `~/.claude/skills/` (for Claude Code / Amp). In Claude Code each skill becomes a `/<name>` slash command. Add new skills as `skills/<name>/SKILL.md` with YAML frontmatter (`name`, `description`); re-run `./setup.sh` to register them.

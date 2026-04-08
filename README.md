@@ -20,7 +20,7 @@ That script:
 - installs npm dependencies for `.pi/extensions/`
 - removes the deprecated `npm:pi-review-loop` package entry so the bundled repo version is used instead
 - links `global/CLAUDE.md` into `~/.claude/CLAUDE.md` when Claude Code or Amp is installed
-- links individual skills into `~/.claude/skills/` when Amp is installed
+- links individual skills into `~/.claude/skills/` when Claude Code or Amp is installed (each skill becomes a `/<name>` slash command in Claude Code)
 
 ## Repository layout
 
