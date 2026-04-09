@@ -146,6 +146,118 @@ if command -v claude &>/dev/null || command -v amp &>/dev/null || [ -d "$CLAUDE_
 fi
 
 # ---------------------------------------------------------------------------
+# Claude Code: review-loop hook and state directory
+# ---------------------------------------------------------------------------
+if command -v claude &>/dev/null || [ -d "$CLAUDE_DIR" ]; then
+    CLAUDE_HOOKS_DIR="$CLAUDE_DIR/hooks"
+    REVIEW_LOOP_DIR="$CLAUDE_DIR/review-loop"
+    mkdir -p "$CLAUDE_HOOKS_DIR"
+    mkdir -p "$REVIEW_LOOP_DIR"
+
+    # 1. Hook script symlink + ensure executable
+    chmod +x "$SCRIPT_DIR/global/claude-review-loop/hook.sh"
+    link "$SCRIPT_DIR/global/claude-review-loop/hook.sh" "$CLAUDE_HOOKS_DIR/review-loop.sh"
+
+    # 2. Prompts symlink
+    link "$SCRIPT_DIR/global/claude-review-loop/prompts" "$REVIEW_LOOP_DIR/prompts"
+
+    # 3. Verify prompt symlinks in repo resolve
+    for pf in code.md plan.md; do
+        if [ ! -r "$SCRIPT_DIR/global/claude-review-loop/prompts/$pf" ]; then
+            echo "  WARNING    prompts/$pf does not resolve — review prompts will be broken"
+        fi
+    done
+
+    # 4. Default config (only on first run)
+    if [ ! -f "$REVIEW_LOOP_DIR/config.json" ]; then
+        cat > "$REVIEW_LOOP_DIR/config.json" <<'CONFIG_EOF'
+{
+    "max_iterations": 7,
+    "auto_trigger": false,
+    "interrupt_behavior": "pause",
+    "exit_patterns_mode": "default",
+    "issues_fixed_patterns_mode": "default",
+    "custom_exit_patterns": [],
+    "custom_issues_fixed_patterns": [],
+    "custom_trigger_patterns": [],
+    "prompt_code": null,
+    "prompt_plan": null
+}
+CONFIG_EOF
+        echo "  created    $REVIEW_LOOP_DIR/config.json (defaults)"
+    else
+        echo "  ok         $REVIEW_LOOP_DIR/config.json (exists)"
+    fi
+
+    # 5. Merge Stop and UserPromptSubmit hooks into settings.json
+    CLAUDE_SETTINGS="$CLAUDE_DIR/settings.json"
+    if command -v jq &>/dev/null; then
+        if [ ! -f "$CLAUDE_SETTINGS" ]; then
+            echo '{}' > "$CLAUDE_SETTINGS"
+        fi
+
+        # Backup once (first run only)
+        if [ ! -f "$CLAUDE_SETTINGS.bak" ]; then
+            cp "$CLAUDE_SETTINGS" "$CLAUDE_SETTINGS.bak"
+            echo "  backed up  $CLAUDE_SETTINGS → $CLAUDE_SETTINGS.bak"
+        fi
+
+        # Validate existing JSON
+        if ! jq -e . "$CLAUDE_SETTINGS" >/dev/null 2>&1; then
+            echo "  ERROR      $CLAUDE_SETTINGS is not valid JSON. Skipping hook merge."
+            echo "             Restore from $CLAUDE_SETTINGS.bak if needed."
+        else
+            HOOK_PATH="~/.claude/hooks/review-loop.sh"
+            for EVENT in Stop UserPromptSubmit; do
+                jq --arg cmd "$HOOK_PATH" --arg event "$EVENT" '
+                  .hooks[$event] = (
+                    (.hooks[$event] // []) as $existing
+                    | if ($existing | any(.hooks[]?.command == $cmd)) then
+                        $existing
+                      else
+                        $existing + [{"hooks": [{"type": "command", "command": $cmd}]}]
+                      end
+                  )
+                ' "$CLAUDE_SETTINGS" > "$CLAUDE_SETTINGS.tmp.$$" && \
+                    mv "$CLAUDE_SETTINGS.tmp.$$" "$CLAUDE_SETTINGS"
+            done
+            echo "  merged     $CLAUDE_SETTINGS hooks (Stop, UserPromptSubmit)"
+        fi
+    else
+        echo "  WARNING    jq not found, skipping settings.json hook merge"
+    fi
+
+    # 6. Post-install sanity check
+    local_fail=0
+    if [ ! -x "$CLAUDE_HOOKS_DIR/review-loop.sh" ] && [ ! -L "$CLAUDE_HOOKS_DIR/review-loop.sh" ]; then
+        echo "  WARNING    hook symlink not executable: $CLAUDE_HOOKS_DIR/review-loop.sh"
+        local_fail=1
+    fi
+    if [ ! -r "$REVIEW_LOOP_DIR/prompts/code.md" ] || [ ! -r "$REVIEW_LOOP_DIR/prompts/plan.md" ]; then
+        echo "  WARNING    prompt symlinks don't resolve"
+        local_fail=1
+    fi
+    if command -v jq &>/dev/null && [ -f "$CLAUDE_SETTINGS" ]; then
+        if ! jq -e '.hooks.Stop[]?.hooks[]? | select(.command | endswith("review-loop.sh"))' "$CLAUDE_SETTINGS" >/dev/null 2>&1; then
+            echo "  WARNING    Stop hook entry missing from settings.json"
+            local_fail=1
+        fi
+        if ! jq -e '.hooks.UserPromptSubmit[]?.hooks[]? | select(.command | endswith("review-loop.sh"))' "$CLAUDE_SETTINGS" >/dev/null 2>&1; then
+            echo "  WARNING    UserPromptSubmit hook entry missing from settings.json"
+            local_fail=1
+        fi
+        if ! jq -e '.' "$REVIEW_LOOP_DIR/config.json" >/dev/null 2>&1; then
+            echo "  WARNING    config.json is not valid JSON"
+            local_fail=1
+        fi
+    fi
+    if [ "$local_fail" -eq 0 ]; then
+        echo "  ✓ review-loop installation verified"
+    fi
+    echo ""
+fi
+
+# ---------------------------------------------------------------------------
 # Ensure shim scripts are executable
 # ---------------------------------------------------------------------------
 for dir in intercepted-commands pixi-intercepted-commands; do
