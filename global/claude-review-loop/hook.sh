@@ -110,6 +110,17 @@ PATTERNS
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
+# Sanitize a value for safe use in arithmetic. Returns 0 for non-integer input.
+# Prevents arithmetic injection (BashPitfalls #46) when values come from files.
+sanitize_int() {
+    local val="$1"
+    if [[ "$val" =~ ^-?[0-9]+$ ]]; then
+        printf '%s' "$val"
+    else
+        printf '0'
+    fi
+}
+
 log() {
     local msg="$*"
     local ts
@@ -156,7 +167,7 @@ read_state() {
 
     # Stale TTL: 2 hours
     local last_updated now
-    last_updated=$(jq -r '.last_updated // 0' <<<"$data")
+    last_updated=$(sanitize_int "$(jq -r '.last_updated // 0' <<<"$data")")
     now=$(date +%s)
     if [ "$((now - last_updated))" -gt 7200 ]; then
         log "WARN: stale state for session $sid (last_updated=$last_updated), deleting"
@@ -219,7 +230,7 @@ read_pending() {
 
     # Stale TTL: 5 minutes
     local created_at now
-    created_at=$(jq -r '.created_at // 0' <<<"$data")
+    created_at=$(sanitize_int "$(jq -r '.created_at // 0' <<<"$data")")
     now=$(date +%s)
     if [ "$((now - created_at))" -gt 300 ]; then
         rm -f "$file"
@@ -481,7 +492,7 @@ read_last_assistant_text() {
 
     # Walk backward through transcript, up to 500 lines
     local reversed
-    reversed=$(eval "$REVERSE" < "$transcript_path" | head -500)
+    reversed=$(eval "$REVERSE" < "$transcript_path" | head -500) || true
 
     while IFS= read -r line; do
         [ -z "$line" ] && continue
@@ -514,7 +525,7 @@ resolve_session_id() {
         pdata=$(jq -e '.' "$pending_file" 2>/dev/null) || continue
         local pcwd pts psid
         pcwd=$(jq -r '.cwd // ""' <<<"$pdata")
-        pts=$(jq -r '.created_at // 0' <<<"$pdata")
+        pts=$(sanitize_int "$(jq -r '.created_at // 0' <<<"$pdata")")
         psid=$(jq -r '.session_id // ""' <<<"$pdata")
 
         # TTL check: 5 minutes
@@ -541,10 +552,19 @@ resolve_session_id() {
         local proj_dir
         for proj_dir in "$projects_dir"/*/; do
             [ -d "$proj_dir" ] || continue
-            # Find most recent .jsonl file
-            local transcript
-            transcript=$(ls -t "$proj_dir"*.jsonl 2>/dev/null | head -1)
-            [ -n "$transcript" ] && [ -f "$transcript" ] || continue
+            # Find most recent .jsonl file (glob + stat, avoids parsing ls)
+            local transcript="" newest_mtime=0
+            local _f _mt
+            for _f in "$proj_dir"*.jsonl; do
+                [ -f "$_f" ] || continue
+                _mt=$(stat -f%m "$_f" 2>/dev/null || stat -c%Y "$_f" 2>/dev/null || echo 0)
+                _mt=$(sanitize_int "$_mt")
+                if [ "$_mt" -gt "$newest_mtime" ]; then
+                    transcript="$_f"
+                    newest_mtime="$_mt"
+                fi
+            done
+            [ -n "$transcript" ] || continue
 
             # Extract cwd from transcript events
             local tcwd
@@ -834,10 +854,14 @@ handle_stop() {
                 *) log "WARN session $input_session: invalid kind '$pending_kind' in pending, defaulting to code"
                    pending_kind=code ;;
             esac
-            activate_core "$input_session" "$input_cwd" "$pending_kind" "" \
-                || log "ERROR session $input_session: activate_core failed during auto-trigger promotion"
+            if activate_core "$input_session" "$input_cwd" "$pending_kind" ""; then
+                delete_pending "$input_session"
+            else
+                log "ERROR session $input_session: activate_core failed during auto-trigger, keeping pending"
+            fi
+        else
+            delete_pending "$input_session"
         fi
-        delete_pending "$input_session"
     fi
 
     # 2. Load state
@@ -882,8 +906,8 @@ handle_stop() {
     # 7. Increment iteration, check max
     local config max iter new_iter
     config=$(read_config)
-    max=$(jq -r '.max_iterations' <<<"$config")
-    iter=$(jq -r '.iteration' <<<"$state")
+    max=$(sanitize_int "$(jq -r '.max_iterations // 7' <<<"$config")")
+    iter=$(sanitize_int "$(jq -r '.iteration // 0' <<<"$state")")
     new_iter=$((iter + 1))
 
     if [ "$new_iter" -ge "$max" ]; then
@@ -902,12 +926,13 @@ handle_stop() {
             log "ERROR session $input_session: set_paused also failed, deleting state"
             delete_state "$input_session"
         fi
+        echo "Review loop paused: could not load prompt file. Run /review-status to check." >&2
         exit 0
     fi
 
     local now new_state
     now=$(date +%s)
-    new_state=$(jq \
+    if ! new_state=$(jq \
         --argjson iter "$new_iter" \
         --argjson now "$now" \
         --arg reason "$prompt" \
@@ -915,7 +940,11 @@ handle_stop() {
          | .last_updated = $now
          | .last_block_at = $now
          | .last_block_reason = $reason' \
-        <<<"$state")
+        <<<"$state"); then
+        log "ERROR session $input_session: jq state update failed, aborting loop"
+        delete_state "$input_session"
+        exit 0
+    fi
 
     # 9. Persist with error handling
     if ! write_state "$input_session" "$new_state"; then
@@ -963,7 +992,7 @@ handle_user_prompt() {
     if [ -n "$state" ]; then
         local last_reason last_block now
         last_reason=$(jq -r '.last_block_reason // ""' <<<"$state")
-        last_block=$(jq -r '.last_block_at // 0' <<<"$state")
+        last_block=$(sanitize_int "$(jq -r '.last_block_at // 0' <<<"$state")")
         now=$(date +%s)
 
         if [ -n "$last_reason" ] && [ "$input_prompt" = "$last_reason" ]; then
@@ -1092,7 +1121,7 @@ cmd_selftest() {
     activate_core "test-3" "/tmp" "code" ""
     make_transcript "$TMPDIR_ST/transcript-3.jsonl" "I fixed 3 issues. No issues found."
     output=$( (handle_stop '{"hook_event_name":"Stop","session_id":"test-3","cwd":"/tmp","transcript_path":"'"$TMPDIR_ST"'/transcript-3.jsonl"}') 2>/dev/null) || true
-    assert "Stop with exit+issues-fixed → block emitted" echo "$output" | jq -e '.decision == "block"' >/dev/null 2>&1
+    assert "Stop with exit+issues-fixed → block emitted" printf '%s\n' "$output" | jq -e '.decision == "block"' >/dev/null 2>&1
     assert_file_exists "state preserved after issues-fixed" "$TMPDIR_ST/state-test-3.json"
     local iter3
     iter3=$(jq -r '.iteration' "$TMPDIR_ST/state-test-3.json")
@@ -1120,13 +1149,13 @@ cmd_selftest() {
     activate_core "test-5" "/different/dir" "code" ""
     make_transcript "$TMPDIR_ST/transcript-5.jsonl" "Still looking at the code..."
     output=$( (handle_stop '{"hook_event_name":"Stop","session_id":"test-5","cwd":"/tmp","transcript_path":"'"$TMPDIR_ST"'/transcript-5.jsonl"}') 2>/dev/null) || true
-    assert "Stop with cwd mismatch → still blocks" echo "$output" | jq -e '.decision == "block"' >/dev/null 2>&1
+    assert "Stop with cwd mismatch → still blocks" printf '%s\n' "$output" | jq -e '.decision == "block"' >/dev/null 2>&1
 
     # --- Test: Auto-trigger promotion ---
     write_pending "test-6" "/tmp" true "code"
     make_transcript "$TMPDIR_ST/transcript-6.jsonl" "Done implementing the plan."
     output=$( (handle_stop '{"hook_event_name":"Stop","session_id":"test-6","cwd":"/tmp","transcript_path":"'"$TMPDIR_ST"'/transcript-6.jsonl"}') 2>/dev/null) || true
-    assert "Auto-trigger → block emitted" echo "$output" | jq -e '.decision == "block"' >/dev/null 2>&1
+    assert "Auto-trigger → block emitted" printf '%s\n' "$output" | jq -e '.decision == "block"' >/dev/null 2>&1
     assert_file_exists "state created by promotion" "$TMPDIR_ST/state-test-6.json"
     assert_file_missing "pending deleted after promotion" "$TMPDIR_ST/pending-test-6.json"
 
@@ -1226,7 +1255,7 @@ cmd_selftest() {
     jq '.auto_trigger = true' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" \
         && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
     output=$( (handle_user_prompt '{"hook_event_name":"UserPromptSubmit","session_id":"test-10","cwd":"/tmp","prompt":"Great, now implement the plan"}') 2>/dev/null) || true
-    assert "Auto-trigger → notice printed" echo "$output" | grep -q "INTERNAL NOTE"
+    assert "Auto-trigger → notice printed" printf '%s\n' "$output" | grep -q "INTERNAL NOTE"
     assert_file_exists "delayed pending created" "$TMPDIR_ST/pending-test-10.json"
     local delayed10
     delayed10=$(jq -r '.delayed' "$TMPDIR_ST/pending-test-10.json" 2>/dev/null)
@@ -1298,13 +1327,13 @@ cmd_selftest() {
 
     # --- Test: resume when not active ---
     output=$(cmd_resume "test-none" 2>/dev/null) || true
-    assert "resume when inactive → not active msg" echo "$output" | grep -q "not active"
+    assert "resume when inactive → not active msg" printf '%s\n' "$output" | grep -q "not active"
 
     # --- Test: resume when paused ---
     activate_core "test-13" "/tmp" "code" "test focus"
     set_paused "test-13" true
     output=$(cmd_resume "test-13" 2>/dev/null) || true
-    assert "resume prints prompt" echo "$output" | grep -q "carefully read over"
+    assert "resume prints prompt" printf '%s\n' "$output" | grep -q "carefully read over"
     local paused13
     paused13=$(jq -r '.paused' "$TMPDIR_ST/state-test-13.json")
     assert "resume clears paused" test "$paused13" = "false"
@@ -1334,6 +1363,26 @@ cmd_selftest() {
     chmod 644 "$TMPDIR_ST/state-test-15.json" 2>/dev/null || true
     rm -f "$TMPDIR_ST/state-test-15.json"
     assert "Write failure → no block output" test -z "$output"
+
+    # --- Test: Long transcript (>500 lines) does not crash (SIGPIPE regression) ---
+    activate_core "test-sigpipe" "/tmp" "code" ""
+    local long_transcript="$TMPDIR_ST/transcript-sigpipe.jsonl"
+    local i
+    for ((i=1; i<=699; i++)); do
+        printf '{"type":"system","message":{"content":"padding line %d"}}\n' "$i"
+    done > "$long_transcript"
+    printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Still working on review."}]}}\n' >> "$long_transcript"
+    local sigpipe_exit=0
+    output=$( (handle_stop '{"hook_event_name":"Stop","session_id":"test-sigpipe","cwd":"/tmp","transcript_path":"'"$long_transcript"'"}') 2>&1) || sigpipe_exit=$?
+    assert "Long transcript does not crash (exit 0)" test "$sigpipe_exit" -eq 0
+    assert "Long transcript emits block" printf '%s\n' "$output" | jq -e '.decision == "block"' >/dev/null 2>&1
+
+    # --- Test: handle_stop exit code is 0 (unmasked error check) ---
+    activate_core "test-noerrmask" "/tmp" "code" ""
+    make_transcript "$TMPDIR_ST/transcript-noerrmask.jsonl" "I found some issues and fixed them."
+    local noerr_exit=0
+    output=$( (handle_stop '{"hook_event_name":"Stop","session_id":"test-noerrmask","cwd":"/tmp","transcript_path":"'"$TMPDIR_ST"'/transcript-noerrmask.jsonl"}') 2>&1) || noerr_exit=$?
+    assert "handle_stop exits 0 (unmasked)" test "$noerr_exit" -eq 0
 
     # --- Summary ---
     echo ""
