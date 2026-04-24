@@ -22,3 +22,8 @@ You are activating the plan review loop. Do this now:
 
 3. If the command fails (non-zero exit), relay its stderr message to the user
    instead of starting the review.
+
+If the project has `.claude/review-prompts/plan.md` in its root, that file is
+used as the plan-review prompt automatically (project-local instructions
+override the global default). Inline focus text from `/review-plan <focus>`
+is still appended after whichever prompt is selected.

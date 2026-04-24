@@ -71,6 +71,7 @@ jq '.permissions.allow += ["Bash(bash ~/.claude/hooks/review-loop.sh:*)"] | .per
     "max_iterations": 7,
     "auto_trigger": false,
     "interrupt_behavior": "pause",
+    "skip_on_question": true,
     "exit_patterns_mode": "default",
     "issues_fixed_patterns_mode": "default",
     "custom_exit_patterns": [],
@@ -84,11 +85,24 @@ jq '.permissions.allow += ["Bash(bash ~/.claude/hooks/review-loop.sh:*)"] | .per
 | Field | Description |
 |---|---|
 | `max_iterations` | Maximum review passes before auto-stop (default 7). |
-| `auto_trigger` | When true, prompts matching trigger patterns (e.g., "implement the plan") automatically start a review loop after Claude finishes the request. Disabled by default. |
+| `auto_trigger` | When true, prompts matching trigger patterns (e.g., "implement the plan") schedule a review loop to start after Claude finishes the request. Disabled by default. The hook writes a delayed pending file silently — no in-context notice is injected. |
 | `interrupt_behavior` | `"pause"` (default) or `"stop"`. What happens when you send a message during an active loop. |
+| `skip_on_question` | When true (default), if the agent ends an iteration with a clarifying question, the hook lets the Stop go through and marks `awaiting_clarification` in state. Your reply is then treated as a continuation, not an interrupt — the next iteration runs naturally. |
 | `*_patterns_mode` | `"default"`, `"extend"` (append custom to defaults), or `"replace"` (custom only). |
 | `custom_*_patterns` | Arrays of regex strings (ERE, case-insensitive). |
-| `prompt_code` / `prompt_plan` | Override prompt file paths. `null` uses defaults. |
+| `prompt_code` / `prompt_plan` | Global override prompt file paths. `null` uses the project-local file if present, otherwise the built-in default. |
+
+### Project-local prompts
+
+If your project has `<cwd>/.claude/review-prompts/code.md` or `plan.md`, the loop uses it instead of the built-in default. Resolution order:
+
+1. Config override (`prompt_code` / `prompt_plan`) — highest priority, global per-user.
+2. Project-local file at `<cwd>/.claude/review-prompts/<kind>.md`.
+3. Built-in default at `~/.claude/review-loop/prompts/<kind>.md`.
+
+Inline focus text (`/review-start <focus>`) appends `**Additional focus:** <focus>` to whichever prompt is selected.
+
+The cwd used for resolution is the cwd recorded in state at activation time, so `cd`-ing mid-loop doesn't switch prompts.
 
 ## How termination works
 
@@ -121,6 +135,7 @@ Per-session loop state. Deleted on clean deactivation; absence means "inactive".
 {
     "active": true,
     "paused": false,
+    "awaiting_clarification": false,
     "iteration": 1,
     "kind": "code",
     "focus": "focus on error handling",
@@ -133,6 +148,8 @@ Per-session loop state. Deleted on clean deactivation; absence means "inactive".
 }
 ```
 
+`awaiting_clarification` is set when the agent ends an iteration with a question (last non-empty line ends with `?`, and the text doesn't already match an exit/issues-fixed pattern). The flag is cleared on the next user prompt, which is then treated as a continuation rather than an interrupt.
+
 TTL: 2 hours from `last_updated`. Stale files are auto-deleted.
 
 ### `pending-<session_id>.json`
@@ -143,7 +160,13 @@ Short-lived marker created by UserPromptSubmit when it sees a `/review-*` comman
 
 When `auto_trigger` is enabled, prompts matching patterns like "implement the plan", "implement the spec", "let's implement", etc. schedule a review loop to auto-activate after Claude finishes the request. The loop starts on the next Stop event, not immediately.
 
+The hook writes a delayed pending file silently — it does NOT inject an out-of-band notice into the agent's context. The next Stop event promotes the pending file to active state automatically.
+
 **Semantic difference from pi:** pi counts the user's response to the trigger prompt as review pass 1. Claude Code separates them: implementation first, then review. Both result in the same final state.
+
+## Iteration header
+
+Stop-hook re-injections of the review prompt are prefixed with `(Review pass N of M)\n\n` so the agent can calibrate effort and signal closure naturally. The first iteration triggered by `/review-start` (which goes through `cmd_activate`'s direct stdout) has no header — the agent is starting fresh.
 
 ## Differences from pi-review-loop
 
@@ -179,11 +202,13 @@ jq . ~/.claude/review-loop/config.json
 
 ## Known limitations
 
-- **Case B (forced continuations):** It is unknown whether UserPromptSubmit fires on Stop-injected continuations. Two mitigations are in place: content matching (compares prompt to last block reason) and time-based (2-second window). If the loop pauses unexpectedly after one iteration, Case B handling may need tuning.
+- **Case B (forced continuations):** It is unknown whether UserPromptSubmit fires on Stop-injected continuations. Mitigation is exact content match against `last_block_reason`. The previous 2-second timing window was removed as brittle; if real Case B failures show up, add instrumentation rather than re-introducing time-based heuristics.
 
 - **Two concurrent sessions in the same directory:** Control subcommands (`/review-*`) use a heuristic to find the session ID via pending files. If two `claude` instances run in the same directory, the heuristic may pick the wrong session. Use different directories or run one loop at a time.
 
 - **PCRE patterns on macOS:** Two issues-fixed patterns use lookbehind (`(?<!no\s)`) which requires PCRE grep. On macOS without `ggrep` (GNU grep), a fallback two-pass sanitization is used. Install GNU grep via `brew install grep` for exact pattern matching.
+
+- **Question-detection heuristic:** Detects if the last non-empty line ends with `?`. False negatives on questions that don't end with `?` (e.g., "Let me know which approach you prefer."), false positives on rhetorical questions inside code-explanations. Disable via `skip_on_question: false` in config if it gets in the way.
 
 ## Dependencies
 

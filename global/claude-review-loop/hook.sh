@@ -46,10 +46,12 @@ else
     REVERSE="awk '{ lines[NR] = \$0 } END { for (i = NR; i >= 1; i--) print lines[i] }'"
 fi
 
-# PCRE grep (for lookbehind patterns)
-if command -v ggrep >/dev/null 2>&1 && ggrep -P '' </dev/null 2>/dev/null; then
+# PCRE grep (for lookbehind patterns). Probe with a known-matching input —
+# `grep -P '' </dev/null` exits 1 (no match in empty stdin) even when PCRE
+# works, so use a positive match to distinguish "supported" from "rejected".
+if command -v ggrep >/dev/null 2>&1 && printf 'a' | ggrep -Pq 'a' 2>/dev/null; then
     GREP_P="ggrep -P"
-elif grep -P '' </dev/null 2>/dev/null; then
+elif printf 'a' | grep -Pq 'a' 2>/dev/null; then
     GREP_P="grep -P"
 else
     GREP_P=""
@@ -79,7 +81,7 @@ get_issues_fixed_patterns() {
     cat <<'PATTERNS'
 issues?\s+(i\s+)?fixed
 fixed\s+(the\s+)?(following|these|this|issues?|bugs?)
-fixed\s+\d+\s+issues?
+fixed\s+[0-9]+\s+issues?
 found\s+and\s+(fixed|corrected|resolved)
 bugs?\s+(i\s+)?fixed
 corrected\s+(the\s+)?(following|these|this)
@@ -217,6 +219,24 @@ set_paused() {
     write_state "$sid" "$new_state"
 }
 
+set_awaiting_clarification() {
+    local sid="$1" val="$2"
+    local state
+    state=$(read_state "$sid")
+    if [ -z "$state" ]; then
+        return 1
+    fi
+    local now
+    now=$(date +%s)
+    local new_state
+    new_state=$(jq \
+        --argjson val "$val" \
+        --argjson now "$now" \
+        '.awaiting_clarification = $val | .last_updated = $now' \
+        <<<"$state") || return 1
+    write_state "$sid" "$new_state"
+}
+
 # ─── Pending helpers ─────────────────────────────────────────────────────────
 
 read_pending() {
@@ -284,7 +304,8 @@ read_config() {
         "custom_issues_fixed_patterns": [],
         "custom_trigger_patterns": [],
         "prompt_code": null,
-        "prompt_plan": null
+        "prompt_plan": null,
+        "skip_on_question": true
     }'
     if [ ! -f "$CONFIG_FILE" ]; then
         printf '%s' "$defaults"
@@ -434,14 +455,34 @@ matches_exit() { match_patterns "$1" "exit"; }
 matches_issues_fixed() { match_patterns "$1" "issues_fixed"; }
 matches_trigger() { match_patterns "$1" "trigger"; }
 
+# Detect a clarifying question in the agent's last message. Heuristic:
+# the last non-empty line ends with '?', AND the text doesn't already match
+# an exit or issues-fixed pattern (those signal natural completion, not a
+# user-blocking question).
+looks_like_question() {
+    local text="$1"
+    local last_line
+    last_line=$(printf '%s' "$text" | awk 'NF { last = $0 } END { print last }')
+
+    if [[ "$last_line" =~ [?][[:space:]]*$ ]]; then
+        if ! matches_exit "$text" && ! matches_issues_fixed "$text"; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
 # ─── Prompt building ─────────────────────────────────────────────────────────
 
 build_prompt() {
-    local kind="$1" focus="$2"
+    local kind="$1" focus="$2" cwd="$3"
     local config override file content
     config=$(read_config)
 
-    # Config override: .prompt_code or .prompt_plan
+    # Resolution order:
+    #   1. Config override (.prompt_code / .prompt_plan) — global, user-set
+    #   2. Project-local: <cwd>/.claude/review-prompts/<kind>.md
+    #   3. Global default: $PROMPTS_DIR/<kind>.md
     override=$(jq -r ".prompt_$kind // empty" <<<"$config")
 
     if [ -n "$override" ]; then
@@ -449,6 +490,8 @@ build_prompt() {
             '~/'*)  file="$HOME/${override#\~/}" ;;
             *)      file="$override" ;;
         esac
+    elif [ -n "$cwd" ] && [ -r "$cwd/.claude/review-prompts/$kind.md" ]; then
+        file="$cwd/.claude/review-prompts/$kind.md"
     else
         file="$PROMPTS_DIR/$kind.md"
     fi
@@ -604,6 +647,7 @@ activate_core() {
             '{
                 active: true,
                 paused: false,
+                awaiting_clarification: false,
                 iteration: 0,
                 kind: $kind,
                 focus: $focus,
@@ -615,8 +659,9 @@ activate_core() {
                 last_block_reason: ""
             }')
     else
-        # Update existing: clear paused, update kind/cwd, update focus only
-        # if non-empty (empty focus from auto-trigger must not wipe explicit focus)
+        # Update existing: clear paused, clear awaiting_clarification,
+        # update kind/cwd, update focus only if non-empty (empty focus from
+        # auto-trigger must not wipe explicit focus)
         new_state=$(jq \
             --arg kind "$kind" \
             --arg focus "$focus" \
@@ -624,6 +669,7 @@ activate_core() {
             --argjson now "$now" \
             '.active = true
              | .paused = false
+             | .awaiting_clarification = false
              | .kind = $kind
              | .cwd = $cwd
              | (if $focus != "" then .focus = $focus else . end)
@@ -663,7 +709,7 @@ cmd_activate() {
         exit 1
     fi
 
-    if ! build_prompt "$kind" "$focus"; then
+    if ! build_prompt "$kind" "$focus" "$PWD"; then
         echo "ERROR: could not build review prompt. Check prompts directory." >&2
         exit 1
     fi
@@ -722,10 +768,11 @@ cmd_resume() {
         exit 1
     fi
 
-    local kind focus
+    local kind focus state_cwd
     kind=$(jq -r '.kind' <<<"$state")
     focus=$(jq -r '.focus // ""' <<<"$state")
-    if ! build_prompt "$kind" "$focus"; then
+    state_cwd=$(jq -r '.cwd // ""' <<<"$state")
+    if ! build_prompt "$kind" "$focus" "$state_cwd"; then
         echo "ERROR: could not build review prompt." >&2
         exit 1
     fi
@@ -741,15 +788,17 @@ cmd_status() {
         echo "Review loop: inactive"
         echo ""
         echo "Config:"
-        echo "  max_iterations: $(jq -r '.max_iterations' <<<"$config")"
-        echo "  auto_trigger:   $(jq -r '.auto_trigger' <<<"$config")"
-        echo "  interrupt:      $(jq -r '.interrupt_behavior' <<<"$config")"
+        echo "  max_iterations:   $(jq -r '.max_iterations' <<<"$config")"
+        echo "  auto_trigger:     $(jq -r '.auto_trigger' <<<"$config")"
+        echo "  interrupt:        $(jq -r '.interrupt_behavior' <<<"$config")"
+        echo "  skip_on_question: $(jq -r 'if .skip_on_question == null then "true" else (.skip_on_question | tostring) end' <<<"$config")"
         return 0
     fi
 
-    local active paused iteration kind focus max cwd
+    local active paused awaiting iteration kind focus max cwd
     active=$(jq -r '.active' <<<"$state")
     paused=$(jq -r '.paused' <<<"$state")
+    awaiting=$(jq -r '.awaiting_clarification // false' <<<"$state")
     iteration=$(jq -r '.iteration' <<<"$state")
     kind=$(jq -r '.kind' <<<"$state")
     focus=$(jq -r '.focus // ""' <<<"$state")
@@ -757,19 +806,21 @@ cmd_status() {
     cwd=$(jq -r '.cwd // ""' <<<"$state")
 
     echo "Review loop: active"
-    echo "  kind:       $kind"
-    echo "  iteration:  $iteration / $max"
-    echo "  paused:     $paused"
+    echo "  kind:                   $kind"
+    echo "  iteration:              $iteration / $max"
+    echo "  paused:                 $paused"
+    echo "  awaiting_clarification: $awaiting"
     if [ -n "$focus" ]; then
-        echo "  focus:      $focus"
+        echo "  focus:                  $focus"
     fi
-    echo "  cwd:        $cwd"
-    echo "  session:    $sid"
+    echo "  cwd:                    $cwd"
+    echo "  session:                $sid"
     echo ""
     echo "Config:"
-    echo "  max_iterations: $max"
-    echo "  auto_trigger:   $(jq -r '.auto_trigger' <<<"$config")"
-    echo "  interrupt:      $(jq -r '.interrupt_behavior' <<<"$config")"
+    echo "  max_iterations:   $max"
+    echo "  auto_trigger:     $(jq -r '.auto_trigger' <<<"$config")"
+    echo "  interrupt:        $(jq -r '.interrupt_behavior' <<<"$config")"
+    echo "  skip_on_question: $(jq -r '.skip_on_question // true' <<<"$config")"
 }
 
 cmd_max() {
@@ -896,6 +947,24 @@ handle_stop() {
         exit 0
     fi
 
+    # 5b. Clarifying question → mark awaiting_clarification, allow stop.
+    # The user's reply gets treated as a continuation by handle_user_prompt,
+    # not an interrupt, so the loop resumes naturally on the next Stop.
+    # jq's `// true` treats `false` as null, so write the default check
+    # explicitly: missing/null → true, present → its boolean value.
+    local config_q skip_on_q
+    config_q=$(read_config)
+    skip_on_q=$(jq -r 'if .skip_on_question == null then "true" else (.skip_on_question | tostring) end' <<<"$config_q")
+    if [ "$skip_on_q" = "true" ] && looks_like_question "$text"; then
+        if ! set_awaiting_clarification "$input_session" true; then
+            log "ERROR session $input_session: set_awaiting_clarification failed, deleting state"
+            delete_state "$input_session"
+        else
+            log "session $input_session: clarifying question detected, allowing stop"
+        fi
+        exit 0
+    fi
+
     # 6. Termination: exit phrase AND NOT issues-fixed
     if matches_exit "$text" && ! matches_issues_fixed "$text"; then
         delete_state "$input_session"
@@ -917,10 +986,11 @@ handle_stop() {
     fi
 
     # 8. Build prompt, persist state, emit block
-    local kind focus prompt
+    local kind focus state_cwd prompt
     kind=$(jq -r '.kind' <<<"$state")
     focus=$(jq -r '.focus // ""' <<<"$state")
-    if ! prompt=$(build_prompt "$kind" "$focus"); then
+    state_cwd=$(jq -r '.cwd // ""' <<<"$state")
+    if ! prompt=$(build_prompt "$kind" "$focus" "$state_cwd"); then
         log "ERROR session $input_session: build_prompt failed, pausing loop"
         if ! set_paused "$input_session" true; then
             log "ERROR session $input_session: set_paused also failed, deleting state"
@@ -929,6 +999,11 @@ handle_stop() {
         echo "Review loop paused: could not load prompt file. Run /review-status to check." >&2
         exit 0
     fi
+
+    # Iteration header: tell the agent which pass it's on so it can calibrate.
+    # Only on Stop-hook re-injections; the first iteration via cmd_activate
+    # has no header (the agent is starting fresh).
+    prompt="(Review pass $new_iter of $max)"$'\n\n'"$prompt"
 
     local now new_state
     now=$(date +%s)
@@ -988,21 +1063,27 @@ handle_user_prompt() {
         exit 0
     fi
 
-    # 3. Case B mitigation: detect forced continuations
+    # 3. Case B mitigation: detect Stop-injected forced continuations via
+    # exact content match against last_block_reason. The block-reason text
+    # is stable across emit/inject, so this is the deterministic guard.
     if [ -n "$state" ]; then
-        local last_reason last_block now
+        local last_reason
         last_reason=$(jq -r '.last_block_reason // ""' <<<"$state")
-        last_block=$(sanitize_int "$(jq -r '.last_block_at // 0' <<<"$state")")
-        now=$(date +%s)
-
         if [ -n "$last_reason" ] && [ "$input_prompt" = "$last_reason" ]; then
             log "session $input_session: UserPromptSubmit matches last_block_reason, forced continuation"
             exit 0
         fi
-        if [ "$((now - last_block))" -lt 2 ]; then
-            log "session $input_session: UserPromptSubmit within 2s of last block, treating as forced continuation"
-            exit 0
+    fi
+
+    # 3b. Awaiting clarification: agent asked a question last turn; treat
+    # this user reply as a continuation, not an interrupt or new auto-trigger.
+    if [ -n "$state" ] && [ "$(jq -r '.awaiting_clarification // false' <<<"$state")" = "true" ]; then
+        if ! set_awaiting_clarification "$input_session" false; then
+            log "ERROR session $input_session: clearing awaiting_clarification failed"
+        else
+            log "session $input_session: awaiting_clarification cleared, treating reply as continuation"
         fi
+        exit 0
     fi
 
     # 4. Auto-trigger
@@ -1011,7 +1092,7 @@ handle_user_prompt() {
     if [ "$auto_trigger_enabled" = "true" ] && [ -z "$state" ]; then
         if matches_trigger "$input_prompt"; then
             write_pending "$input_session" "$input_cwd" true "code"
-            echo "[INTERNAL NOTE, do not mention in reply: Review loop will auto-activate after this response. Complete the user's request first; a review pass will begin automatically.]"
+            log "session $input_session: auto-trigger matched, delayed pending written"
             exit 0
         fi
     fi
@@ -1095,6 +1176,21 @@ cmd_selftest() {
 
     assert_file_exists() { assert "$1 exists" test -f "$2"; }
     assert_file_missing() { assert "$1 missing" test ! -f "$2"; }
+    not() { ! "$@"; }
+
+    # Assert that piping `output` through a command (jq, grep, ...) succeeds.
+    # Avoids the `assert ... | cmd` pipefail trap that aborts the script.
+    assert_pipe() {
+        total=$((total + 1))
+        local desc="$1" output="$2"
+        shift 2
+        if printf '%s\n' "$output" | "$@" >/dev/null 2>&1; then
+            pass=$((pass + 1))
+        else
+            fail=$((fail + 1))
+            echo "  FAIL: $desc"
+        fi
+    }
 
     # Helper: create a canned transcript with assistant text
     make_transcript() {
@@ -1121,7 +1217,7 @@ cmd_selftest() {
     activate_core "test-3" "/tmp" "code" ""
     make_transcript "$TMPDIR_ST/transcript-3.jsonl" "I fixed 3 issues. No issues found."
     output=$( (handle_stop '{"hook_event_name":"Stop","session_id":"test-3","cwd":"/tmp","transcript_path":"'"$TMPDIR_ST"'/transcript-3.jsonl"}') 2>/dev/null) || true
-    assert "Stop with exit+issues-fixed → block emitted" printf '%s\n' "$output" | jq -e '.decision == "block"' >/dev/null 2>&1
+    assert_pipe "Stop with exit+issues-fixed → block emitted" "$output" jq -e '.decision == "block"'
     assert_file_exists "state preserved after issues-fixed" "$TMPDIR_ST/state-test-3.json"
     local iter3
     iter3=$(jq -r '.iteration' "$TMPDIR_ST/state-test-3.json")
@@ -1149,13 +1245,13 @@ cmd_selftest() {
     activate_core "test-5" "/different/dir" "code" ""
     make_transcript "$TMPDIR_ST/transcript-5.jsonl" "Still looking at the code..."
     output=$( (handle_stop '{"hook_event_name":"Stop","session_id":"test-5","cwd":"/tmp","transcript_path":"'"$TMPDIR_ST"'/transcript-5.jsonl"}') 2>/dev/null) || true
-    assert "Stop with cwd mismatch → still blocks" printf '%s\n' "$output" | jq -e '.decision == "block"' >/dev/null 2>&1
+    assert_pipe "Stop with cwd mismatch → still blocks" "$output" jq -e '.decision == "block"'
 
     # --- Test: Auto-trigger promotion ---
     write_pending "test-6" "/tmp" true "code"
     make_transcript "$TMPDIR_ST/transcript-6.jsonl" "Done implementing the plan."
     output=$( (handle_stop '{"hook_event_name":"Stop","session_id":"test-6","cwd":"/tmp","transcript_path":"'"$TMPDIR_ST"'/transcript-6.jsonl"}') 2>/dev/null) || true
-    assert "Auto-trigger → block emitted" printf '%s\n' "$output" | jq -e '.decision == "block"' >/dev/null 2>&1
+    assert_pipe "Auto-trigger → block emitted" "$output" jq -e '.decision == "block"'
     assert_file_exists "state created by promotion" "$TMPDIR_ST/state-test-6.json"
     assert_file_missing "pending deleted after promotion" "$TMPDIR_ST/pending-test-6.json"
 
@@ -1214,7 +1310,8 @@ cmd_selftest() {
     paused8=$(jq -r '.paused' "$TMPDIR_ST/state-test-8.json" 2>/dev/null)
     assert "Case B content match → not paused (forced continuation skip)" test "$paused8" = "false"
 
-    # --- Test: Case B time mitigation ---
+    # --- Test: 2-sec timing window is GONE — recent block + non-matching
+    #     prompt should now run interrupt logic (paused), not skip ---
     activate_core "test-8b" "/tmp" "code" ""
     local now_ts
     now_ts=$(date +%s)
@@ -1225,7 +1322,7 @@ cmd_selftest() {
     output=$( (handle_user_prompt '{"hook_event_name":"UserPromptSubmit","session_id":"test-8b","cwd":"/tmp","prompt":"different prompt"}') 2>/dev/null) || true
     local paused8b
     paused8b=$(jq -r '.paused' "$TMPDIR_ST/state-test-8b.json" 2>/dev/null)
-    assert "Case B time check → not paused (forced continuation skip)" test "$paused8b" = "false"
+    assert "Recent block + non-matching prompt → paused (no 2-sec window)" test "$paused8b" = "true"
 
     # --- Test: Interrupt → pause (default) ---
     activate_core "test-9" "/tmp" "code" ""
@@ -1251,11 +1348,11 @@ cmd_selftest() {
     jq '.interrupt_behavior = "pause"' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" \
         && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
 
-    # --- Test: Auto-trigger ---
+    # --- Test: Auto-trigger writes pending silently (no INTERNAL NOTE) ---
     jq '.auto_trigger = true' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" \
         && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
     output=$( (handle_user_prompt '{"hook_event_name":"UserPromptSubmit","session_id":"test-10","cwd":"/tmp","prompt":"Great, now implement the plan"}') 2>/dev/null) || true
-    assert "Auto-trigger → notice printed" printf '%s\n' "$output" | grep -q "INTERNAL NOTE"
+    assert "Auto-trigger → no INTERNAL NOTE in stdout" test -z "$output"
     assert_file_exists "delayed pending created" "$TMPDIR_ST/pending-test-10.json"
     local delayed10
     delayed10=$(jq -r '.delayed' "$TMPDIR_ST/pending-test-10.json" 2>/dev/null)
@@ -1327,13 +1424,13 @@ cmd_selftest() {
 
     # --- Test: resume when not active ---
     output=$(cmd_resume "test-none" 2>/dev/null) || true
-    assert "resume when inactive → not active msg" printf '%s\n' "$output" | grep -q "not active"
+    assert_pipe "resume when inactive → not active msg" "$output" grep -q "not active"
 
     # --- Test: resume when paused ---
     activate_core "test-13" "/tmp" "code" "test focus"
     set_paused "test-13" true
     output=$(cmd_resume "test-13" 2>/dev/null) || true
-    assert "resume prints prompt" printf '%s\n' "$output" | grep -q "carefully read over"
+    assert_pipe "resume prints prompt" "$output" grep -q "carefully read over"
     local paused13
     paused13=$(jq -r '.paused' "$TMPDIR_ST/state-test-13.json")
     assert "resume clears paused" test "$paused13" = "false"
@@ -1375,7 +1472,7 @@ cmd_selftest() {
     local sigpipe_exit=0
     output=$( (handle_stop '{"hook_event_name":"Stop","session_id":"test-sigpipe","cwd":"/tmp","transcript_path":"'"$long_transcript"'"}') 2>&1) || sigpipe_exit=$?
     assert "Long transcript does not crash (exit 0)" test "$sigpipe_exit" -eq 0
-    assert "Long transcript emits block" printf '%s\n' "$output" | jq -e '.decision == "block"' >/dev/null 2>&1
+    assert_pipe "Long transcript emits block" "$output" jq -e '.decision == "block"'
 
     # --- Test: handle_stop exit code is 0 (unmasked error check) ---
     activate_core "test-noerrmask" "/tmp" "code" ""
@@ -1383,6 +1480,88 @@ cmd_selftest() {
     local noerr_exit=0
     output=$( (handle_stop '{"hook_event_name":"Stop","session_id":"test-noerrmask","cwd":"/tmp","transcript_path":"'"$TMPDIR_ST"'/transcript-noerrmask.jsonl"}') 2>&1) || noerr_exit=$?
     assert "handle_stop exits 0 (unmasked)" test "$noerr_exit" -eq 0
+
+    # --- Test: looks_like_question heuristic ---
+    assert "question: 'Should I use A or B?' → true" \
+        looks_like_question "Should I use approach A or B?"
+    assert "question: '...Ready for another review?' → false (issues_fixed guard)" \
+        not looks_like_question "Fixed 3 issues. Ready for another review?"
+    assert "question: '...Anything else?' → false (exit guard)" \
+        not looks_like_question "No issues found. Anything else?"
+    assert "question: trailing line is 'Done.' → false" \
+        not looks_like_question $'Here is the diff:\nx = ?\nDone.'
+
+    # --- Test: Question-detection sets awaiting_clarification, allows stop ---
+    activate_core "test-q1" "/tmp" "code" ""
+    make_transcript "$TMPDIR_ST/transcript-q1.jsonl" "I drafted a plan. Should I implement approach A or B?"
+    output=$( (handle_stop '{"hook_event_name":"Stop","session_id":"test-q1","cwd":"/tmp","transcript_path":"'"$TMPDIR_ST"'/transcript-q1.jsonl"}') 2>/dev/null) || true
+    assert "Question detected → no block emitted (allow stop)" test -z "$output"
+    local awaiting_q1 paused_q1
+    awaiting_q1=$(jq -r '.awaiting_clarification' "$TMPDIR_ST/state-test-q1.json" 2>/dev/null)
+    paused_q1=$(jq -r '.paused' "$TMPDIR_ST/state-test-q1.json" 2>/dev/null)
+    assert "Question detected → awaiting_clarification=true" test "$awaiting_q1" = "true"
+    assert "Question detected → not paused (loop still active)" test "$paused_q1" = "false"
+
+    # --- Test: awaiting_clarification cleared on next user prompt, no interrupt ---
+    output=$( (handle_user_prompt '{"hook_event_name":"UserPromptSubmit","session_id":"test-q1","cwd":"/tmp","prompt":"Use approach A"}') 2>/dev/null) || true
+    local awaiting_q1b paused_q1b
+    awaiting_q1b=$(jq -r '.awaiting_clarification' "$TMPDIR_ST/state-test-q1.json" 2>/dev/null)
+    paused_q1b=$(jq -r '.paused' "$TMPDIR_ST/state-test-q1.json" 2>/dev/null)
+    assert "Reply clears awaiting_clarification" test "$awaiting_q1b" = "false"
+    assert "Reply does NOT pause loop (continuation, not interrupt)" test "$paused_q1b" = "false"
+
+    # --- Test: skip_on_question=false disables the guard ---
+    jq '.skip_on_question = false' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" \
+        && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+    activate_core "test-q2" "/tmp" "code" ""
+    make_transcript "$TMPDIR_ST/transcript-q2.jsonl" "Working on it. What now?"
+    output=$( (handle_stop '{"hook_event_name":"Stop","session_id":"test-q2","cwd":"/tmp","transcript_path":"'"$TMPDIR_ST"'/transcript-q2.jsonl"}') 2>/dev/null) || true
+    assert_pipe "skip_on_question=false → block emitted despite question" \
+        "$output" jq -e '.decision == "block"'
+    jq '.skip_on_question = true' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" \
+        && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+
+    # --- Test: Iteration header in block reason ---
+    activate_core "test-iter" "/tmp" "code" ""
+    jq '.iteration = 2' "$TMPDIR_ST/state-test-iter.json" > "$TMPDIR_ST/state-test-iter.json.tmp" \
+        && mv "$TMPDIR_ST/state-test-iter.json.tmp" "$TMPDIR_ST/state-test-iter.json"
+    make_transcript "$TMPDIR_ST/transcript-iter.jsonl" "Found 1 issue and fixed it."
+    output=$( (handle_stop '{"hook_event_name":"Stop","session_id":"test-iter","cwd":"/tmp","transcript_path":"'"$TMPDIR_ST"'/transcript-iter.jsonl"}') 2>/dev/null) || true
+    local reason_iter
+    reason_iter=$(printf '%s\n' "$output" | jq -r '.reason' 2>/dev/null)
+    assert "Block reason starts with iteration header" \
+        bash -c "case \"\$0\" in '(Review pass 3 of 7)'*) exit 0 ;; *) exit 1 ;; esac" "$reason_iter"
+
+    # --- Test: Project-local prompt resolution ---
+    local proj_dir="$TMPDIR_ST/proj1"
+    mkdir -p "$proj_dir/.claude/review-prompts"
+    printf '%s\n' "MARKER-PROJECT-PROMPT review the project way" > "$proj_dir/.claude/review-prompts/code.md"
+    output=$(build_prompt "code" "" "$proj_dir" 2>/dev/null) || true
+    assert_pipe "Project-local prompt: used when present" \
+        "$output" grep -q "MARKER-PROJECT-PROMPT"
+
+    # Project-local + focus appended
+    output=$(build_prompt "code" "focus on auth" "$proj_dir" 2>/dev/null) || true
+    assert_pipe "Project-local prompt: focus still appended" \
+        "$output" grep -q "Additional focus:.*focus on auth"
+
+    # Config override beats project-local
+    local override_file="$TMPDIR_ST/override.md"
+    printf '%s\n' "MARKER-OVERRIDE-PROMPT" > "$override_file"
+    jq --arg p "$override_file" '.prompt_code = $p' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" \
+        && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+    output=$(build_prompt "code" "" "$proj_dir" 2>/dev/null) || true
+    assert_pipe "Config override beats project-local" \
+        "$output" grep -q "MARKER-OVERRIDE-PROMPT"
+    jq '.prompt_code = null' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" \
+        && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+
+    # No project-local file → falls to global default
+    local empty_dir="$TMPDIR_ST/proj-empty"
+    mkdir -p "$empty_dir"
+    output=$(build_prompt "code" "" "$empty_dir" 2>/dev/null) || true
+    assert_pipe "No project file → global default used" \
+        "$output" grep -q "carefully read over"
 
     # --- Summary ---
     echo ""

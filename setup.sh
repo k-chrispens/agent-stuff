@@ -274,8 +274,6 @@ for dir in intercepted-commands pixi-intercepted-commands; do
 done
 
 echo ""
-echo "=== done ==="
-echo ""
 echo "Symlinks:"
 for p in "$PI_AGENT_DIR/extensions" "$PI_AGENT_DIR/skills" "$CLAUDE_DIR/CLAUDE.md"; do
     if [ -L "$p" ]; then
