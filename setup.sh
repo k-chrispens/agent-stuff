@@ -36,6 +36,59 @@ link() {
 }
 
 # ---------------------------------------------------------------------------
+# Sync blueprint skills from k-chrispens/blueprint fork
+#
+# The skill content lives in a separate repo (a personal fork of imbue-ai/blueprint).
+# We clone it into $SCRIPT_DIR/.cache/blueprint (gitignored) and then symlink
+# skills/blueprint{,-generate} into the cache. The existing per-skill loops below
+# then pick them up automatically — no special-casing in the install logic.
+#
+# Update policy: try `git fetch && git merge --ff-only`, but tolerate offline
+# or non-ff state by falling back to the cached copy with a warning.
+# ---------------------------------------------------------------------------
+BLUEPRINT_FORK_URL="git@github.com:k-chrispens/blueprint.git"
+BLUEPRINT_BRANCH="main"
+BLUEPRINT_CACHE_DIR="$SCRIPT_DIR/.cache/blueprint"
+BLUEPRINT_SKILLS=(blueprint blueprint-generate)
+BLUEPRINT_OK=0
+
+if command -v git &>/dev/null; then
+    if [ ! -d "$BLUEPRINT_CACHE_DIR/.git" ]; then
+        mkdir -p "$(dirname "$BLUEPRINT_CACHE_DIR")"
+        echo "  cloning    $BLUEPRINT_FORK_URL -> $BLUEPRINT_CACHE_DIR"
+        if git clone --quiet --branch "$BLUEPRINT_BRANCH" "$BLUEPRINT_FORK_URL" "$BLUEPRINT_CACHE_DIR"; then
+            BLUEPRINT_OK=1
+        else
+            echo "  WARNING    failed to clone blueprint fork — blueprint skills will be skipped"
+        fi
+    else
+        if git -C "$BLUEPRINT_CACHE_DIR" fetch --quiet origin "$BLUEPRINT_BRANCH" 2>/dev/null \
+            && git -C "$BLUEPRINT_CACHE_DIR" merge --ff-only --quiet "origin/$BLUEPRINT_BRANCH" 2>/dev/null; then
+            sha=$(git -C "$BLUEPRINT_CACHE_DIR" rev-parse --short HEAD)
+            echo "  updated    $BLUEPRINT_CACHE_DIR @ $sha"
+        else
+            sha=$(git -C "$BLUEPRINT_CACHE_DIR" rev-parse --short HEAD 2>/dev/null || echo "?")
+            echo "  WARNING    blueprint fork not updated (offline or non-ff) — using cached @ $sha"
+        fi
+        BLUEPRINT_OK=1
+    fi
+
+    if [ "$BLUEPRINT_OK" = "1" ]; then
+        for skill_name in "${BLUEPRINT_SKILLS[@]}"; do
+            src="$BLUEPRINT_CACHE_DIR/skills/$skill_name"
+            dst="$SCRIPT_DIR/skills/$skill_name"
+            if [ ! -d "$src" ]; then
+                echo "  WARNING    $src missing in fork — $skill_name not installed"
+                continue
+            fi
+            link "$src" "$dst"
+        done
+    fi
+else
+    echo "  WARNING    git not found — skipping blueprint fork sync"
+fi
+
+# ---------------------------------------------------------------------------
 # ~/.pi/agent/extensions -> repo global/extensions
 # ---------------------------------------------------------------------------
 mkdir -p "$PI_AGENT_DIR"

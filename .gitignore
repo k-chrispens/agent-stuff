@@ -1,3 +1,6 @@
 node_modules
 package-lock.json
 .pi/todos
+/.cache/
+/skills/blueprint
+/skills/blueprint-generate
