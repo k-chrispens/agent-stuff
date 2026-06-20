@@ -1,40 +1,44 @@
 # AI-Assisted Learning: Workflow Reference Card
 
-> **The first principle is that you must not fool yourself — and you are the easiest person to fool.**
-> There is a difference between knowing the name of something and knowing something. This workflow exists to keep that difference visible.
-> **Core loop:** Orient → Struggle → Dialogue → Test → Repeat
+> **The first principle is that you must not fool yourself — and you are the easiest person to fool.** (Feynman)
+> **Learning is not supposed to be frictionless — the primary feeling should be that of effort. You want the mental equivalent of sweat.** (Karpathy)
+> There is a difference between knowing the name of something and knowing something — and between learning and the *feeling* of learning. This workflow keeps both differences visible.
+> **This is for learning deeply, not for using a tool to get something done.** If you just need to ship or get an answer, skip the workflow and ask normally.
+> **Core loop:** Triage (once) → Struggle → Dialogue → Test → repeat depth-first, pulling concepts in on demand.
 
 ---
 
-## Phase 1: Orient (once per topic)
+## Triage (once per topic — a conversation, not a prompt)
 
-### Prompt Template: Dependency Graph
+This phase is a short back-and-forth, not a one-shot prompt. The AI asks one question at a time and only moves on when you're ready. You should be doing most of the talking.
+
+### What the conversation establishes
+- **Your true motivation.** Why this, why now? Genuine curiosity and willingness to invest time beat casual interest. The AI will probe — be honest.
+- **Deep learning vs. tool usage.** If you really just want to *use* something or get an answer, this is the wrong mode. No shame — exit and ask normally.
+- **The effort dial (yours to set).** High motivation → full workflow. Limited time → a lighter version (shorter struggle, lighter testing). Less effort in, less understanding out — your call.
+- **A self-explanation target.** What should you be able to *do and explain in your own words* by the end? Make it concrete ("derive the ELBO from scratch and explain each term"), not vague ("understand variational inference").
+- **A concrete, depth-first goal.** Default to a project (build nanoGPT to learn transformers; write the parser to learn parsing). When a project doesn't fit, pick an equivalent: re-derive a theorem, reproduce a paper's result, solve a hard problem set, explain a chapter cold.
+
+### Opener (paste this, then converse)
 
 ```
-I want to learn [TOPIC]. My background: [SPECIFIC PRIOR KNOWLEDGE — courses, tools, papers, not vague claims].
-
-Give me a dependency graph of the core concepts, ordered from foundational to advanced. Show what depends on what. Don't explain any of the concepts — just name them and show relationships.
-
-For each concept, I'll tell you whether I already know it, partially know it, or it's new to me.
+I want to learn [TOPIC]. Before we plan anything, ask me — one question at a time — why I want to learn this and what I want to be able to do with it. Help me turn it into a concrete, depth-first goal (a project if one fits). Don't lay out a full curriculum; we'll pull in concepts on demand as the goal demands them. Keep your turns short.
 ```
 
-### Prompt Template: Source Identification
-
-```
-For [CONCEPT CLUSTER], suggest 1-2 primary sources (textbook chapters, papers, documentation sections) that I should work from. I prefer [rigorous/intuitive/applied] treatments. I have access to [LIST RESOURCES].
-```
+### Depth-first, not breadth-first
+Don't map the whole field up front (Karpathy: "do not learn bottom-up breadth-first"). Start the goal, and when you hit a wall that needs a prerequisite, learn *just that*, then return. The map serves the project, never the reverse.
 
 ---
 
-## Phase 2: Struggle (per concept, NO AI)
+## Struggle (per concept, NO AI)
 
-**Minimum time:** 30–60 minutes depending on concept complexity.
+**Minimum time:** scaled to your effort budget — ~20 min for a light session, 60+ for a full one. Karpathy: for serious learning, block out a ~4-hour focused window.
 
 ### What to do
-- Read primary source material
-- Attempt derivations / implementations / explanations on paper or in editor
-- Write down your understanding in your own words
-- Write down **specific** confusion points
+- **Build or derive it from scratch first.** Construction is the default; reading-and-explaining is the fallback for things you genuinely can't build.
+- **Type code out yourself — do not copy-paste** (Karpathy). The act of typing each line is part of the learning.
+- Don't just read: **read → take notes → re-read → rephrase → process → manipulate.** Passive reading is the *feeling* of learning, not learning.
+- Write down your understanding in your own words, and **specific** confusion points
 
 ### What to bring back
 1. Your current attempt (explanation, code, derivation)
@@ -45,7 +49,7 @@ If you're tempted to open Claude before your minimum time is up, notice that imp
 
 ---
 
-## Phase 3: Dialogue (per concept, two modes)
+## Dialogue (per concept, two modes)
 
 ### Mode A: Coach — Resolve Confusions
 
@@ -85,7 +89,7 @@ Act as a student who's struggling with [CONCEPT]. I'm going to explain it to you
 
 ---
 
-## Phase 4: Test (per concept)
+## Test (per concept)
 
 ### Prompt Template: Problem Generation
 
@@ -118,6 +122,7 @@ Answer honestly:
 - **Confidence (1-5):** Could I solve a similar problem tomorrow with no help?
 - **Remaining gaps:** What parts still feel shaky?
 - **Prediction:** If this were harder, what would trip me up?
+- **Progress, not perfection:** What can I do now that I couldn't an hour ago? (Karpathy: compare only to younger you, never to others.)
 
 ---
 
@@ -152,21 +157,21 @@ The whole point is to not fool yourself. Here's what self-deception looks like i
 ## Domain-Specific Notes
 
 ### Mathematical / Theoretical Learning
-- Phase 2: Derivations on paper. Attempt the proof before you look for help. If you can't derive it, you don't understand it — you just know its name.
-- Phase 3: Coach mode on "where does this step come from?" and "why does it have to be this way?" — not "what's the answer?"
-- Phase 4: Proof problems, derivation variants, connecting formalisms. Vary the surface features; keep the deep structure.
+- Struggle: Derivations on paper. Attempt the proof before you look for help. If you can't derive it, you don't understand it — you just know its name.
+- Dialogue: Coach mode on "where does this step come from?" and "why does it have to be this way?" — not "what's the answer?"
+- Test: Proof problems, derivation variants, connecting formalisms. Vary the surface features; keep the deep structure.
 - **Caution:** AI math reasoning is fragile at graduate+ level. It will confidently write derivations with subtle errors. Always verify independently. Don't trust AI algebra — you are the authority here.
 
 ### Programming / Skill Learning
-- Phase 2: Read docs, write code, hit compiler errors. The errors are informative — they're telling you what you don't understand yet.
-- Phase 3: Bring broken code and ask about your mental model of the language semantics, not "fix my code."
-- Phase 4: Implementation challenges with specified behavior, no starter code. If you can't write it from scratch, you don't understand it.
+- Struggle: Read docs, write code from a blank file (type it out, don't paste), hit compiler errors. The errors are informative — they're telling you what you don't understand yet.
+- Dialogue: Bring broken code and ask about your mental model of the language semantics, not "fix my code."
+- Test: Implementation challenges with specified behavior, no starter code. If you can't write it from scratch, you don't understand it.
 - **Caution:** Claude Code is a force multiplier for production but actively harmful for learning. Be honest with yourself about which mode you're in before each session.
 
 ### Paper Reading / Conceptual Learning
-- Phase 2: Read the primary source. Write a summary in your own words BEFORE any AI interaction. You wouldn't learn quantum mechanics by having someone describe a textbook to you — you'd read the textbook.
-- Phase 3: Student mode is especially powerful here — explain the paper's argument to AI and find out where your understanding falls apart.
-- Phase 4: Application questions, connection questions, "what would change if..." questions. Real understanding means you can extend the idea, not just restate it.
+- Struggle: Read the primary source. Write a summary in your own words BEFORE any AI interaction. You wouldn't learn quantum mechanics by having someone describe a textbook to you — you'd read the textbook.
+- Dialogue: Student mode is especially powerful here — explain the paper's argument to AI and find out where your understanding falls apart.
+- Test: Application questions, connection questions, "what would change if..." questions. Real understanding means you can extend the idea, not just restate it.
 - **Caution:** AI summaries harm high-performing readers. They replace the constructive cognitive work of reading with passive consumption. Always read first.
 
 ---
