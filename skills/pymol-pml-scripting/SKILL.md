@@ -5,11 +5,13 @@ description: |
   (1) user asks to create a PyMOL script or .pml file, (2) user wants to load,
   align, color, or group molecular structures in PyMOL, (3) user gets SyntaxError
   or IndentationError from a .pml file, (4) user wants cartoon outlines, transparency,
-  or ray tracing settings. Covers .pml syntax rules, grouping pitfalls, outline
-  rendering via ray_trace_mode, color-by-element, chain break hiding, and more.
+  or ray tracing settings, (5) a cartoon renders as disconnected fragments / stray
+  loops around alternate-conformation (alt-loc) residues. Covers .pml syntax rules,
+  grouping pitfalls, outline rendering via ray_trace_mode, color-by-element, chain
+  break hiding, the alt-loc backbone-break cartoon fix, and more.
 author: Claude Code
-version: 1.0.0
-date: 2026-03-26
+version: 1.1.0
+date: 2026-06-04
 ---
 
 # PyMOL .pml Script Generation
@@ -99,6 +101,21 @@ to the next line can cause the next line to be misinterpreted:
 
 Avoid commas, colons, or code-like syntax inside comments that could confuse
 PyMOL's parser if the comment were stripped.
+
+**Semicolons are the worst offender — keep `#` comments semicolon-free.** A `;`
+splits a line into separate commands *even inside a `#` comment*: PyMOL runs the
+text after the `;` as its own command, producing a SyntaxError or
+"Unrecognized command" on every run.
+
+```pml
+# WRONG - the tail after ';' is executed as a command -> SyntaxError
+# Outline inherited from .pymolrc (gray30); antialias 2 also from there.
+
+# CORRECT - no semicolon
+# Outline inherited from .pymolrc (gray30) - antialias 2 also from there.
+```
+
+(Inside a `python` / `python end` block, `;` is fine — that is real Python.)
 
 ### Rule 4: Grouping objects
 
@@ -207,16 +224,127 @@ color good_teal, my_object
 Also note any global settings (bg_color, ray_trace_mode, lighting) that the
 .pymolrc sets, to avoid overriding them unnecessarily.
 
+### Rule 11: Alt-loc backbone breaks the cartoon
+
+**Symptom:** the cartoon renders as disconnected fragments or stray loops
+around residues with alternate conformations. Turning off the gap dashes
+(`set cartoon_gap_cutoff, 0`) only hides the dashes, not the break.
+
+**Cause:** the structure file encodes the blank alt-loc as a quoted space
+(`' '`) instead of the mmCIF null (`.`). PyMOL bonds two atoms only when their
+alt-loc codes are compatible — equal, or one of them *empty* — and it tests
+"empty" as the empty string. A space is neither empty nor equal to `A`/`B`, so
+every blank↔A/B backbone peptide bond is dropped at load (within-alt A–A / B–B
+and blank–blank bonds are still fine). Adding the bonds by hand with `bond`
+does **not** fix the cartoon: the cartoon spline is built from *load-time*
+connectivity and cached, and `bond`/`sort` do not invalidate that cache. This
+is common in crystallographic/experimental density inputs.
+
+**Fix at the source whenever you can:** make the writer emit `.` (or empty),
+not `' '`, for `label_alt_id` on non-alternate atoms. Then PyMOL bonds
+correctly at load with no runtime workaround at all.
+
+#### Default fix (non-rebond — works in PyMOL < 3.2)
+
+`rebond` (below) is the clean fix but is only in PyMOL 3.2, which is not yet a
+full release. Until it ships, **default to the source fix**: rewrite the blank
+alt-id to `.` *before* load (the spline is cached at load, so it must be fixed
+first), then load the corrected text in memory via `cmd.load_raw(text, "cif", obj)`.
+
+**Rewrite ONLY the `label_alt_id` column — never a blind global replace.** A
+naive `txt.replace(" ' ' ", " . ")` (or `sed "s/ ' ' / . /g"`) also clobbers any
+*other* quoted single-space token, and a naive whitespace split mangles
+unquoted primes in atom names like `O5'`. Detect the column from the
+`_atom_site.` loop header and rewrite that field only, with an mmCIF-aware
+tokenizer (a quote opens a token only at token start; the close quote must be
+followed by whitespace/eol). Drop this helper block near the top of the `.pml`
+and call `load_altfix file.cif, obj` wherever a density/experimental input is
+loaded:
+
+```pml
+python
+def _altfix_text(txt):
+    L = txt.split("\n")
+    cols = [l.strip() for l in L if l.strip().startswith("_atom_site.")]
+    if "_atom_site.label_alt_id" not in cols:
+        return txt
+    ai = cols.index("_atom_site.label_alt_id")
+    def fix(line):
+        i, n, k = 0, len(line), 0
+        while i < n:
+            while i < n and line[i] in " \t":
+                i += 1
+            if i >= n:
+                break
+            s = i
+            if line[i] in "'\"":
+                q = line[i]; i += 1
+                while i < n and not (line[i] == q and (i + 1 >= n or line[i + 1] in " \t")):
+                    i += 1
+                i += 1; v = line[s + 1:i - 1]
+            else:
+                while i < n and line[i] not in " \t":
+                    i += 1
+                v = line[s:i]
+            if k == ai:
+                return (line[:s] + "." + line[i:]) if v.strip() == "" else line
+            k += 1
+        return line
+    return "\n".join(fix(l) if (l[:4] == "ATOM" or l[:6] == "HETATM") else l for l in L)
+def load_altfix(filename, oname):
+    with open(filename) as _fh:
+        cmd.load_raw(_altfix_text(_fh.read()), "cif", oname.strip())
+cmd.extend("load_altfix", load_altfix)
+python end
+
+load_altfix ./density_input.cif, density_input
+```
+
+This is column-surgical (only blank alt-id fields change), needs no temp files,
+and restores the dropped blank↔A/B backbone bonds so the cartoon stays intact.
+Apply it only to the experimental/density objects that have the bug — leave
+plain `load` on multi-state prediction ensembles (load_raw is single-object).
+
+#### PyMOL 3.2+ alternative (rebond)
+
+When PyMOL 3.2 is a full release, the in-PyMOL fix is two lines after `load`:
+
+```pml
+load density_input.cif, density_input
+alter density_input, alt=alt.strip()
+rebond density_input
+```
+
+`alt.strip()` rewrites the space to `""` so the bonder will form blank↔A/B;
+`rebond` reconnects by distance and rebuilds the cartoon, still honoring
+alt-loc incompatibility (no spurious A↔B bonds, even sub-Å A/B contacts stay
+unbonded). **Caveats:** `rebond` takes an object name (whole-object only, not a
+selection) and recomputes *every* distance bond — safe for protein-only
+objects, but for ligands/metals whose bonds distance can't reproduce, fix at
+the source instead. At that point the non-rebond block above can simply be
+deleted.
+
+**Gotcha — reserved object names load silently empty.** Names like `fixed`,
+`x`, `y`, `z` are PyMOL selection keywords; loading into them prints
+`Warning: '<name>' is a reserved keyword, appending underscore` and the object
+becomes `<name>_`, so later `count_atoms("fixed")` / selections see nothing.
+Pick non-reserved object names (`corrected`, `density_input`, ...).
+
 ## Verification
 
 After generating a `.pml` script:
 
 1. Scan every line: is it a valid PyMOL command or `#` comment?
 2. No Python syntax (no `for`, `def`, `if`, `import`, indentation, `"""`)
-3. No multi-line comments with problematic punctuation
-4. Groups are flat (one level only, no nesting groups into groups)
-5. All file paths are correct relative paths
-6. `util.cnc` follows every `color` command if element coloring is desired
+   outside a `python` / `python end` block
+3. No `;` in any `#` comment (it would run the tail as a command)
+4. No multi-line comments with problematic punctuation
+5. Groups are flat (one level only, no nesting groups into groups)
+6. All file paths are correct relative paths
+7. `util.cnc` follows every `color` command if element coloring is desired
+8. If a cartoon breaks at alt-loc residues, apply the Rule 11 alt-loc fix
+   (rewrite the blank `label_alt_id` column to `.` before load) and use
+   non-reserved object names
 
 ## Example
 
@@ -283,3 +411,5 @@ zoom
 - [BLOPIG - Tips & tricks with PyMOL](https://www.blopig.com/blog/2023/10/tips-tricks-with-pymol/)
 - [PyMOL Wiki - Ray](https://pymolwiki.org/index.php/Ray)
 - [PyMOL Wiki - Group](https://pymolwiki.org/index.php/Group)
+- [PyMOL Wiki - Rebond](https://pymolwiki.org/index.php/Rebond) (alt-loc cartoon fix; PyMOL 3.2+)
+- [PyMOL Wiki - Load_raw](https://pymolwiki.org/index.php/Load_raw) (load a fixed CIF from a string)
