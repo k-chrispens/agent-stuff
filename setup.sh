@@ -281,30 +281,30 @@ CONFIG_EOF
     fi
 
     # 6. Post-install sanity check
-    local_fail=0
+    review_loop_fail=0
     if [ ! -x "$CLAUDE_HOOKS_DIR/review-loop.sh" ] && [ ! -L "$CLAUDE_HOOKS_DIR/review-loop.sh" ]; then
         echo "  WARNING    hook symlink not executable: $CLAUDE_HOOKS_DIR/review-loop.sh"
-        local_fail=1
+        review_loop_fail=1
     fi
     if [ ! -r "$REVIEW_LOOP_DIR/prompts/code.md" ] || [ ! -r "$REVIEW_LOOP_DIR/prompts/plan.md" ]; then
         echo "  WARNING    prompt symlinks don't resolve"
-        local_fail=1
+        review_loop_fail=1
     fi
     if command -v jq &>/dev/null && [ -f "$CLAUDE_SETTINGS" ]; then
         if ! jq -e '.hooks.Stop[]?.hooks[]? | select(.command | endswith("review-loop.sh"))' "$CLAUDE_SETTINGS" >/dev/null 2>&1; then
             echo "  WARNING    Stop hook entry missing from settings.json"
-            local_fail=1
+            review_loop_fail=1
         fi
         if ! jq -e '.hooks.UserPromptSubmit[]?.hooks[]? | select(.command | endswith("review-loop.sh"))' "$CLAUDE_SETTINGS" >/dev/null 2>&1; then
             echo "  WARNING    UserPromptSubmit hook entry missing from settings.json"
-            local_fail=1
+            review_loop_fail=1
         fi
         if ! jq -e '.' "$REVIEW_LOOP_DIR/config.json" >/dev/null 2>&1; then
             echo "  WARNING    config.json is not valid JSON"
-            local_fail=1
+            review_loop_fail=1
         fi
     fi
-    if [ "$local_fail" -eq 0 ]; then
+    if [ "$review_loop_fail" -eq 0 ]; then
         echo "  ✓ review-loop installation verified"
     fi
     echo ""
