@@ -2,5 +2,6 @@ node_modules
 package-lock.json
 .pi/todos
 /.cache/
+/.worktrees/
 /skills/blueprint
 /skills/blueprint-generate
