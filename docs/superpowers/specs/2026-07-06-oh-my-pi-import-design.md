@@ -39,12 +39,15 @@ A new Pi tool named `web_search` replaces the current `native-web-search` skill 
 
 MVP behavior:
 
-- Input: `query`, optional `recency`, optional `limit`.
+- Input: `query`, optional `recency`, optional `limit`, optional `domains`, optional `unrestricted`.
+- Default to a curated domain allowlist inspired by OMP's domain-specific web handlers. The first-pass list should favor high-signal technical and reference sources: git hosts, official docs, package registries, Stack Overflow/Stack Exchange, academic/security databases, standards/reference sites, and a small set of news/social developer sources.
+- Restrict searches to the allowlist unless the caller explicitly sets `unrestricted: true`.
 - Provider order: use keyed providers when env vars are present; otherwise fall back to DuckDuckGo HTML search.
-- Output: concise answer/source list when the provider supplies answers, otherwise source titles, URLs, and snippets.
-- Failure mode: return a normal tool result with a clear error instead of throwing for missing providers.
+- Apply domain restrictions with native provider filters where available (for example Exa `includeDomains`); otherwise rewrite the query with `site:` clauses and post-filter returned URLs.
+- Output: concise answer/source list when the provider supplies answers, otherwise source titles, URLs, and snippets. Include a note when results were filtered by domain allowlist.
+- Failure mode: return a normal tool result with a clear error instead of throwing for missing providers or zero allowlisted results.
 
-The first pass can be simpler than OMP's provider chain. Provider richness is follow-up work.
+The first pass can be simpler than OMP's provider chain, but the domain allowlist is part of phase 1. Provider richness is follow-up work.
 
 ### `subagent` tool
 
@@ -126,6 +129,7 @@ This is a standalone bridge, not a Pi extension.
 - `hashline_edit` and `ast_edit` must avoid partial writes where practical.
 - Any tool that mutates files should participate in Pi's file mutation queue when available.
 - Network search should include source URLs and should not invent citations.
+- `web_search` should default to allowlisted domains and require an explicit `unrestricted` opt-out for broad web search.
 
 ## Verification
 
@@ -141,6 +145,7 @@ This is a standalone bridge, not a Pi extension.
 
 ### Parity debt
 
+- Tune the curated web-search domain allowlist from real usage, and decide whether to expose project/user config files for it.
 - Add richer web-search provider fallback matching more of OMP's provider chain.
 - Add real LSP JSON-RPC support for hover, definition, references, rename, and code actions.
 - Add preview/apply workflow for `ast_edit` if phase 1 lands direct apply only.
