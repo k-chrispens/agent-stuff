@@ -3,7 +3,7 @@ import path from "node:path";
 import { Type } from "@sinclair/typebox";
 import { StringEnum } from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Filesystem, InMemorySnapshotStore, Patch, Patcher } from "@oh-my-pi/hashline";
+import { Filesystem, InMemorySnapshotStore, Patch, Patcher, normalizeToLF, stripBom } from "@oh-my-pi/hashline";
 import { resolveInside } from "./lib/omp-lite/common.mjs";
 import { buildSubagentLaunch, formatSubagentResult, makeSessionName, normalizeSubagentTasks } from "./lib/omp-lite/subagent.mjs";
 import { searchWeb } from "./lib/omp-lite/web-search.mjs";
@@ -137,9 +137,11 @@ export default function ompLite(pi: ExtensionAPI): void {
       const canonical = fsAdapter.canonicalPath(params.path);
       const text = await fsAdapter.readText(params.path);
       const relative = path.relative(ctx.cwd, canonical).split(path.sep).join("/");
-      const tag = snapshots.record(canonical, text);
-      const lines = text.split(/\r?\n/).map((line, index) => `${index + 1}:${line}`);
-      return { content: [{ type: "text", text: `[${relative}#${tag}]\n${lines.join("\n")}` }], details: { path: relative, tag } };
+      const { text: bomlessText } = stripBom(text);
+      const normalized = normalizeToLF(bomlessText);
+      const lines = normalized.split("\n");
+      const tag = snapshots.record(canonical, normalized, lines.map((_, index) => index + 1));
+      return { content: [{ type: "text", text: `[${relative}#${tag}]\n${lines.map((line, index) => `${index + 1}:${line}`).join("\n")}` }], details: { path: relative, tag } };
     },
   });
 
