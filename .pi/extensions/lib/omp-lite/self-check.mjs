@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { domainMatches, normalizeDomain, shellQuote } from "./common.mjs";
+import { domainMatches, normalizeDomain, resolveInside, shellQuote } from "./common.mjs";
 import { defaultLspServers, formatLspStatus } from "./lsp.mjs";
 import { buildDomainRestrictedQuery, filterSourcesByDomains, DEFAULT_SEARCH_DOMAINS } from "./web-search.mjs";
 import { buildSubagentLaunch, normalizeSubagentTasks } from "./subagent.mjs";
@@ -24,5 +24,7 @@ assert.match(buildSubagentLaunch({ sessionName: "worker-a", cwd: "/tmp/x", assig
 assert.match(buildSubagentLaunch({ sessionName: "worker-a", cwd: "/tmp/x", assignment: "do it", context: "ctx" }), /\/name worker-a/);
 assert.ok(defaultLspServers.some((server) => server.name === "typescript-language-server"));
 assert.match(formatLspStatus([{ name: "x", available: false, command: "x", fileTypes: [".x"] }]), /x.*missing/);
+assert.throws(() => resolveInside("/repo", "../escape"), /Path escapes cwd/);
+assert.throws(() => resolveInside("/repo", "/tmp/escape"), /Path escapes cwd/);
 
 console.log("omp-lite helper self-check passed");

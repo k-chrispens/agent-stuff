@@ -184,11 +184,17 @@ export default function ompLite(pi: ExtensionAPI): void {
     promptSnippet: "Preview/apply simple ast-grep structural rewrites",
     parameters: AstEditParams,
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      if (params.ops.length !== 1) return { content: [{ type: "text", text: "Error: MVP ast_edit accepts exactly one op per call." }], details: { success: false } };
+      let paths: string[];
+      try {
+        paths = params.paths.map((inputPath) => resolveInside(ctx.cwd, inputPath));
+      } catch (error) {
+        return { content: [{ type: "text", text: `Error: ${error instanceof Error ? error.message : String(error)}` }], details: { success: false } };
+      }
       const bin = await which(["ast-grep", "sg"]);
       if (!bin) return { content: [{ type: "text", text: "Error: ast_edit requires ast-grep (`brew install ast-grep` or install `sg`)." }], details: { success: false } };
-      if (params.ops.length !== 1) return { content: [{ type: "text", text: "Error: MVP ast_edit accepts exactly one op per call." }], details: { success: false } };
       const op = params.ops[0];
-      const args = ["run", "--pattern", op.pat, "--rewrite", op.out, ...(params.apply ? ["--update-all"] : []), ...params.paths];
+      const args = ["run", "--pattern", op.pat, "--rewrite", op.out, ...(params.apply ? ["--update-all"] : []), ...paths];
       const result = await run(bin, args, { cwd: ctx.cwd, timeoutMs: 60_000 });
       return { content: [{ type: "text", text: `$ ${bin} ${args.join(" ")}\n${result.stdout}${result.stderr ? `\n${result.stderr}` : ""}` }], details: { success: result.code === 0, code: result.code, args } };
     },
