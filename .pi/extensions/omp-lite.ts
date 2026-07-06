@@ -4,8 +4,8 @@ import { Type } from "@sinclair/typebox";
 import { StringEnum } from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Filesystem, InMemorySnapshotStore, Patch, Patcher, normalizeToLF, stripBom } from "@oh-my-pi/hashline";
-import { run, which, resolveInside } from "./lib/omp-lite/common.mjs";
-import { detectLspServers, formatLspStatus, runDiagnostics } from "./lib/omp-lite/lsp.mjs";
+import { ensureHashlineRuntime, resolveExistingInside, resolveInside, resolveWritableInside, run, which } from "./lib/omp-lite/common.mjs";
+import { detectLspServers, formatLspConfig, formatLspStatus, runDiagnostics } from "./lib/omp-lite/lsp.mjs";
 import { buildSubagentLaunch, formatSubagentResult, makeSessionName, normalizeSubagentTasks } from "./lib/omp-lite/subagent.mjs";
 import { searchWeb } from "./lib/omp-lite/web-search.mjs";
 
@@ -44,7 +44,11 @@ class CwdFilesystem extends Filesystem {
   }
 
   async readText(inputPath: string): Promise<string> {
-    return fs.readFile(this.canonicalPath(inputPath), "utf8");
+    return fs.readFile(await resolveExistingInside(this.cwd, inputPath), "utf8");
+  }
+
+  async preflightWrite(inputPath: string): Promise<void> {
+    await resolveWritableInside(this.cwd, inputPath);
   }
 
   async atomicWrite(target: string, content: string): Promise<void> {
@@ -55,17 +59,17 @@ class CwdFilesystem extends Filesystem {
   }
 
   async writeText(inputPath: string, content: string): Promise<{ text: string }> {
-    await this.atomicWrite(this.canonicalPath(inputPath), content);
+    await this.atomicWrite(await resolveWritableInside(this.cwd, inputPath), content);
     return { text: content };
   }
 
   async delete(inputPath: string): Promise<void> {
-    await fs.rm(this.canonicalPath(inputPath));
+    await fs.rm(await resolveExistingInside(this.cwd, inputPath));
   }
 
   async move(from: string, to: string, content?: string): Promise<void> {
-    const fromAbs = this.canonicalPath(from);
-    const toAbs = this.canonicalPath(to);
+    const fromAbs = await resolveExistingInside(this.cwd, from);
+    const toAbs = await resolveWritableInside(this.cwd, to);
     await fs.mkdir(path.dirname(toAbs), { recursive: true });
     if (content === undefined) await fs.rename(fromAbs, toAbs);
     else {
@@ -90,6 +94,8 @@ const LspParams = Type.Object({
   action: StringEnum(["status", "config", "diagnostics"] as const),
   file: Type.Optional(Type.String({ description: "Reserved for future file-scoped LSP actions" })),
 });
+
+ensureHashlineRuntime();
 
 export default function ompLite(pi: ExtensionAPI): void {
   const snapshots = new InMemorySnapshotStore();
@@ -187,7 +193,7 @@ export default function ompLite(pi: ExtensionAPI): void {
       if (params.ops.length !== 1) return { content: [{ type: "text", text: "Error: MVP ast_edit accepts exactly one op per call." }], details: { success: false } };
       let paths: string[];
       try {
-        paths = params.paths.map((inputPath) => resolveInside(ctx.cwd, inputPath));
+        paths = await Promise.all(params.paths.map((inputPath) => resolveExistingInside(ctx.cwd, inputPath)));
       } catch (error) {
         return { content: [{ type: "text", text: `Error: ${error instanceof Error ? error.message : String(error)}` }], details: { success: false } };
       }
@@ -207,9 +213,12 @@ export default function ompLite(pi: ExtensionAPI): void {
     promptSnippet: "Check lightweight language server status and project diagnostics",
     parameters: LspParams,
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      if (params.action === "status" || params.action === "config") {
-        const servers = await detectLspServers(ctx.cwd);
-        return { content: [{ type: "text", text: formatLspStatus(servers) }], details: { servers } };
+      const lspState = await detectLspServers(ctx.cwd);
+      if (params.action === "status") {
+        return { content: [{ type: "text", text: formatLspStatus(lspState.servers) }], details: lspState };
+      }
+      if (params.action === "config") {
+        return { content: [{ type: "text", text: formatLspConfig(lspState) }], details: lspState };
       }
       const result = await runDiagnostics(ctx.cwd);
       return { content: [{ type: "text", text: result.text }], details: result.details };

@@ -1,11 +1,16 @@
+import { randomBytes } from "node:crypto";
 import { shellQuote } from "./common.mjs";
 
-function slug(value) {
+function slug(value, maxLength = 40) {
   return String(value || "worker")
     .toLowerCase()
     .replace(/[^a-z0-9._-]+/g, "-")
     .replace(/^-+|-+$/g, "")
-    .slice(0, 40) || "worker";
+    .slice(0, maxLength) || "worker";
+}
+
+function sessionSuffix() {
+  return randomBytes(3).toString("hex");
 }
 
 function withOptionalFields(task, assignment) {
@@ -30,9 +35,13 @@ export function normalizeSubagentTasks(params = {}) {
   return assignment ? [withOptionalFields(params, assignment)] : [];
 }
 
-export function makeSessionName(prefix, index, task) {
-  const base = task.id || task.description || task.assignment.split(/\s+/).slice(0, 4).join("-");
-  return slug(`${prefix || "subagent"}-${index + 1}-${base}`);
+export function makeSessionName(prefix, index, task, options = {}) {
+  const head = slug(`${prefix || "subagent"}-${index + 1}`, 20);
+  const suffix = slug(options.suffix || sessionSuffix(), 8);
+  const source = task.id || task.description || task.assignment.split(/\s+/).slice(0, 4).join("-");
+  const maxBaseLength = Math.max(1, 40 - head.length - suffix.length - 2);
+  const base = slug(source, maxBaseLength);
+  return `${head}-${base}-${suffix}`;
 }
 
 export function buildSubagentPrompt({ sessionName, assignment, context }) {

@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { realpath as fsRealpath } from "node:fs/promises";
 import path from "node:path";
 
 export function textResult(text, details = {}) {
@@ -7,6 +9,22 @@ export function textResult(text, details = {}) {
 
 export function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'"'"'`)}'`;
+}
+
+export function ensureHashlineRuntime() {
+  const runtime = globalThis.Bun || {};
+  if (runtime.hash?.xxHash32) return;
+  runtime.hash = {
+    ...(runtime.hash || {}),
+    xxHash32(value, seed = 0) {
+      const hash = createHash("sha256");
+      hash.update(String(seed));
+      if (typeof value === "string") hash.update(value);
+      else hash.update(Buffer.from(value));
+      return hash.digest().readUInt32LE(0);
+    },
+  };
+  globalThis.Bun = runtime;
 }
 
 export function run(command, args = [], options = {}) {
@@ -74,4 +92,45 @@ export function resolveInside(cwd, inputPath) {
     throw new Error(`Path escapes cwd: ${inputPath}`);
   }
   return abs;
+}
+
+function assertInside(basePath, resolvedPath, inputPath) {
+  const rel = path.relative(basePath, resolvedPath);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+    throw new Error(`Path escapes cwd via symlink: ${inputPath}`);
+  }
+}
+
+async function realpathIfExists(target) {
+  try {
+    return await fsRealpath(target);
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+export async function resolveExistingInside(cwd, inputPath) {
+  const abs = resolveInside(cwd, inputPath);
+  const [cwdReal, resolved] = await Promise.all([fsRealpath(cwd), fsRealpath(abs)]);
+  assertInside(cwdReal, resolved, inputPath);
+  return abs;
+}
+
+export async function resolveWritableInside(cwd, inputPath) {
+  const abs = resolveInside(cwd, inputPath);
+  const cwdReal = await fsRealpath(cwd);
+  let probe = abs;
+  while (true) {
+    const resolved = await realpathIfExists(probe);
+    if (resolved) {
+      assertInside(cwdReal, resolved, inputPath);
+      return abs;
+    }
+    const parent = path.dirname(probe);
+    if (parent === probe) {
+      throw new Error(`Path not found: ${inputPath}`);
+    }
+    probe = parent;
+  }
 }
