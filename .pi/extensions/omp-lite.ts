@@ -191,6 +191,7 @@ export default function ompLite(pi: ExtensionAPI): void {
     parameters: AstEditParams,
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       if (params.ops.length !== 1) return { content: [{ type: "text", text: "Error: MVP ast_edit accepts exactly one op per call." }], details: { success: false } };
+      if (params.paths.length === 0) return { content: [{ type: "text", text: "Error: MVP ast_edit accepts at least one path per call." }], details: { success: false } };
       let paths: string[];
       try {
         paths = await Promise.all(params.paths.map((inputPath) => resolveExistingInside(ctx.cwd, inputPath)));

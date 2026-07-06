@@ -55,7 +55,7 @@ export function buildSubagentPrompt({ sessionName, assignment, context }) {
 
 export function buildSubagentLaunch({ sessionName, cwd, assignment, context }) {
   const prompt = buildSubagentPrompt({ sessionName, assignment, context });
-  return `cd ${shellQuote(cwd)} && exec pi --session-control ${shellQuote(`/name ${sessionName}`)} ${shellQuote(prompt)}`;
+  return `cd ${shellQuote(cwd)} && exec pi --session-control --name ${shellQuote(sessionName)} ${shellQuote(prompt)}`;
 }
 
 export function formatSubagentResult(spawns) {

@@ -37,7 +37,7 @@ assert.deepEqual(
 assert.deepEqual(normalizeSubagentTasks({ assignment: "do x" }), [{ assignment: "do x" }]);
 assert.equal(normalizeSubagentTasks({ tasks: [{ id: "a", assignment: "do a" }] })[0].id, "a");
 assert.match(buildSubagentLaunch({ sessionName: "worker-a", cwd: "/tmp/x", assignment: "do it", context: "ctx" }), /pi --session-control/);
-assert.match(buildSubagentLaunch({ sessionName: "worker-a", cwd: "/tmp/x", assignment: "do it", context: "ctx" }), /\/name worker-a/);
+assert.match(buildSubagentLaunch({ sessionName: "worker-a", cwd: "/tmp/x", assignment: "do it", context: "ctx" }), /--name 'worker-a'/);
 assert.equal(makeSessionName("subagent", 0, { assignment: "do it" }, { suffix: "fixed" }), "subagent-1-do-it-fixed");
 assert.notEqual(makeSessionName("subagent", 0, { assignment: "do it" }), makeSessionName("subagent", 0, { assignment: "do it" }));
 assert.ok(defaultLspServers.some((server) => server.name === "typescript-language-server"));
