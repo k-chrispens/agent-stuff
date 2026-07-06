@@ -1,6 +1,10 @@
+import { promises as fs } from "node:fs";
+import path from "node:path";
 import { Type } from "@sinclair/typebox";
 import { StringEnum } from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { Filesystem, InMemorySnapshotStore, Patch, Patcher } from "@oh-my-pi/hashline";
+import { resolveInside } from "./lib/omp-lite/common.mjs";
 import { buildSubagentLaunch, formatSubagentResult, makeSessionName, normalizeSubagentTasks } from "./lib/omp-lite/subagent.mjs";
 import { searchWeb } from "./lib/omp-lite/web-search.mjs";
 
@@ -26,7 +30,56 @@ const SubagentParams = Type.Object({
   tasks: Type.Optional(Type.Array(SubagentTask, { description: "Batch of independent tasks" })),
 });
 
+class CwdFilesystem extends Filesystem {
+  cwd: string;
+
+  constructor(cwd: string) {
+    super();
+    this.cwd = cwd;
+  }
+
+  canonicalPath(inputPath: string): string {
+    return resolveInside(this.cwd, inputPath);
+  }
+
+  async readText(inputPath: string): Promise<string> {
+    return fs.readFile(this.canonicalPath(inputPath), "utf8");
+  }
+
+  async atomicWrite(target: string, content: string): Promise<void> {
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    const tmp = path.join(path.dirname(target), `.${path.basename(target)}.${process.pid}.tmp`);
+    await fs.writeFile(tmp, content, "utf8");
+    await fs.rename(tmp, target);
+  }
+
+  async writeText(inputPath: string, content: string): Promise<{ text: string }> {
+    await this.atomicWrite(this.canonicalPath(inputPath), content);
+    return { text: content };
+  }
+
+  async delete(inputPath: string): Promise<void> {
+    await fs.rm(this.canonicalPath(inputPath));
+  }
+
+  async move(from: string, to: string, content?: string): Promise<void> {
+    const fromAbs = this.canonicalPath(from);
+    const toAbs = this.canonicalPath(to);
+    await fs.mkdir(path.dirname(toAbs), { recursive: true });
+    if (content === undefined) await fs.rename(fromAbs, toAbs);
+    else {
+      await this.atomicWrite(toAbs, content);
+      await fs.rm(fromAbs);
+    }
+  }
+}
+
+const HashlineReadParams = Type.Object({ path: Type.String({ description: "File path to read and snapshot" }) });
+const HashlineEditParams = Type.Object({ input: Type.String({ description: "Hashline patch input" }) });
+
 export default function ompLite(pi: ExtensionAPI): void {
+  const snapshots = new InMemorySnapshotStore();
+
   pi.registerTool({
     name: "web_search",
     label: "Web Search",
@@ -70,6 +123,41 @@ export default function ompLite(pi: ExtensionAPI): void {
         spawns.push({ sessionName, command: script });
       }
       return { content: [{ type: "text", text: formatSubagentResult(spawns) }], details: { spawns } };
+    },
+  });
+
+  pi.registerTool({
+    name: "hashline_read",
+    label: "Hashline Read",
+    description: "Read a file and emit a hashline snapshot header usable by hashline_edit.",
+    promptSnippet: "Read a file with a [path#TAG] hashline header for hashline_edit",
+    parameters: HashlineReadParams,
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const fsAdapter = new CwdFilesystem(ctx.cwd);
+      const canonical = fsAdapter.canonicalPath(params.path);
+      const text = await fsAdapter.readText(params.path);
+      const relative = path.relative(ctx.cwd, canonical).split(path.sep).join("/");
+      const tag = snapshots.record(canonical, text);
+      const lines = text.split(/\r?\n/).map((line, index) => `${index + 1}:${line}`);
+      return { content: [{ type: "text", text: `[${relative}#${tag}]\n${lines.join("\n")}` }], details: { path: relative, tag } };
+    },
+  });
+
+  pi.registerTool({
+    name: "hashline_edit",
+    label: "Hashline Edit",
+    description: "Apply a hashline patch previously anchored by hashline_read.",
+    promptSnippet: "Apply hashline patches using [path#TAG] snapshot anchors",
+    parameters: HashlineEditParams,
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const fsAdapter = new CwdFilesystem(ctx.cwd);
+      const patch = Patch.parse(params.input, { cwd: ctx.cwd });
+      const patcher = new Patcher({ fs: fsAdapter, snapshots });
+      const result = await patcher.apply(patch);
+      const text = result.sections
+        .map((section) => `${section.header}\n${section.op}${section.firstChangedLine ? ` firstChangedLine=${section.firstChangedLine}` : ""}${section.warnings.length ? `\nWarnings:\n${section.warnings.join("\n")}` : ""}`)
+        .join("\n\n");
+      return { content: [{ type: "text", text }], details: result };
     },
   });
 }
