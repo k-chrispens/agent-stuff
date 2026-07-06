@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { domainMatches, normalizeDomain, shellQuote } from "./common.mjs";
 import { buildDomainRestrictedQuery, filterSourcesByDomains, DEFAULT_SEARCH_DOMAINS } from "./web-search.mjs";
+import { buildSubagentLaunch, normalizeSubagentTasks } from "./subagent.mjs";
 
 assert.equal(normalizeDomain("https://www.GitHub.com/foo"), "github.com");
 assert.equal(domainMatches("docs.github.com", "github.com"), true);
@@ -15,5 +16,10 @@ assert.deepEqual(
   ], ["github.com"]),
   [{ title: "ok", url: "https://docs.github.com/a" }],
 );
+
+assert.deepEqual(normalizeSubagentTasks({ assignment: "do x" }), [{ assignment: "do x" }]);
+assert.equal(normalizeSubagentTasks({ tasks: [{ id: "a", assignment: "do a" }] })[0].id, "a");
+assert.match(buildSubagentLaunch({ sessionName: "worker-a", cwd: "/tmp/x", assignment: "do it", context: "ctx" }), /pi --session-control/);
+assert.match(buildSubagentLaunch({ sessionName: "worker-a", cwd: "/tmp/x", assignment: "do it", context: "ctx" }), /\/name worker-a/);
 
 console.log("omp-lite helper self-check passed");
