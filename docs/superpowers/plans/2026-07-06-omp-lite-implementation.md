@@ -664,10 +664,15 @@ class CwdFilesystem extends Filesystem {
     return fs.readFile(this.canonicalPath(inputPath), "utf8");
   }
 
-  async writeText(inputPath: string, content: string): Promise<{ text: string }> {
-    const target = this.canonicalPath(inputPath);
+  async atomicWrite(target: string, content: string): Promise<void> {
     await fs.mkdir(path.dirname(target), { recursive: true });
-    await fs.writeFile(target, content, "utf8");
+    const tmp = path.join(path.dirname(target), `.${path.basename(target)}.${process.pid}.tmp`);
+    await fs.writeFile(tmp, content, "utf8");
+    await fs.rename(tmp, target);
+  }
+
+  async writeText(inputPath: string, content: string): Promise<{ text: string }> {
+    await this.atomicWrite(this.canonicalPath(inputPath), content);
     return { text: content };
   }
 
@@ -681,7 +686,7 @@ class CwdFilesystem extends Filesystem {
     await fs.mkdir(path.dirname(toAbs), { recursive: true });
     if (content === undefined) await fs.rename(fromAbs, toAbs);
     else {
-      await fs.writeFile(toAbs, content, "utf8");
+      await this.atomicWrite(toAbs, content);
       await fs.rm(fromAbs);
     }
   }
@@ -746,14 +751,14 @@ pi --no-extensions -e .pi/extensions/omp-lite.ts --help >/tmp/omp-lite-help.txt
 
 Expected: exit `0`. If TypeScript complains about `@oh-my-pi/hashline` types, change the import to a dynamic import inside `hashline_edit` and keep `CwdFilesystem` as a runtime subclass of `hashline.Filesystem`.
 
-- [ ] **Step 4: Test hashline behavior on a temporary file**
+- [ ] **Step 4: Test hashline behavior on an ignored in-worktree scratch file**
 
 Run an interactive manual smoke in Pi or use the tool from a short prompt:
 
 ```bash
-mkdir -p /tmp/omp-lite-check && printf 'const x = 1;\n' >/tmp/omp-lite-check/a.ts
-pi --no-extensions -e "$PWD/.pi/extensions/omp-lite.ts" -p --no-session "Use hashline_read on /tmp/omp-lite-check/a.ts, then use hashline_edit to change line 1 to const x = 2."
-cat /tmp/omp-lite-check/a.ts
+mkdir -p .cache/omp-lite-check && printf 'const x = 1;\n' >.cache/omp-lite-check/a.ts
+pi --no-extensions -e "$PWD/.pi/extensions/omp-lite.ts" -p --no-session "Use hashline_read on .cache/omp-lite-check/a.ts, then use hashline_edit to change line 1 to const x = 2."
+cat .cache/omp-lite-check/a.ts
 ```
 
 Expected final file content:
