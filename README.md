@@ -41,7 +41,7 @@ Available skills in [`skills`](skills):
 - [`/github-issues`](skills/github-issues) - structured issue triage and implementation workflow using worktrees
 - [`/learning-mode`](skills/learning-mode) - structured AI-assisted learning workflow
 - [`/mermaid`](skills/mermaid) - create and validate Mermaid diagrams
-- [`/native-web-search`](skills/native-web-search) - web search via Anthropic or OpenAI Codex models with source URLs
+- [`/native-web-search`](skills/native-web-search) - fallback guidance for the `web_search` tool
 - [`/pymol-pml-scripting`](skills/pymol-pml-scripting) - generate correct PyMOL `.pml` scripts for molecular visualization
 - [`/svg`](skills/svg) - create and validate SVG files
 - [`/uv`](skills/uv) - use `uv` for Python environments, dependencies, and scripts
@@ -68,6 +68,7 @@ This repo currently uses two extension locations:
 - [`files.ts`](.pi/extensions/files.ts) - unified file browser with git status and session references
 - [`loop.ts`](.pi/extensions/loop.ts) - prompt loop for iterative coding with breakout signaling
 - [`notify.ts`](.pi/extensions/notify.ts) - desktop/webhook notifications when the agent finishes
+- [`omp-lite.ts`](.pi/extensions/omp-lite.ts) - current-Pi-compatible thin wrappers inspired by oh-my-pi: domain-restricted `web_search`, zmx `subagent`, `hashline_read`/`hashline_edit`, simple `ast_edit`, and lightweight `lsp`
 - [`pdf-reader`](.pi/extensions/pdf-reader) - reads PDFs and extracts text plus embedded figures
 - [`pixi.ts`](.pi/extensions/pixi.ts) - Pixi-aware Python workflow helpers
 - [`review.ts`](.pi/extensions/review.ts) - Codex-style code review command for branches, commits, PRs, folders, and custom instructions

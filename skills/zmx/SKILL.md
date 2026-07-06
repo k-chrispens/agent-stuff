@@ -16,7 +16,7 @@ Use `zmx` through the `pi-zmx` tools instead of hand-rolled `tmux` control.
 
 ## Subagents and workers
 
-Never background a subagent with bare `&`, `nohup`, or an ad-hoc terminal multiplexer. Use zmx so the human and coordinator can attach, inspect scrollback, recover after disconnects, and kill the worker cleanly.
+Prefer the `subagent` tool for first-class worker delegation. It starts each worker inside zmx, launches `pi --session-control`, names the session, and returns monitoring commands. Use raw `zmx run ... pi ...` only when you need custom worker startup not covered by `subagent`.
 
 ```bash
 zmx run worker-name -d sh -lc 'cd /path/to/worktree && exec pi "/name worker-name" "Do the task"'

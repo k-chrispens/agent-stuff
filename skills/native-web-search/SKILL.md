@@ -5,6 +5,8 @@ description: "Trigger native web search. Use when you need quick internet resear
 
 # Native Web Search
 
+Prefer the `web_search` tool registered by `.pi/extensions/omp-lite.ts`. It searches a curated technical/reference domain allowlist by default, returns source URLs, and supports `unrestricted: true` when broad web search is necessary. Use `search.mjs` only as a fallback when the tool is unavailable.
+
 Use this skill to run a **fast model with native web search enabled** and get a concise research summary with explicit full URLs.
 
 ## Script
