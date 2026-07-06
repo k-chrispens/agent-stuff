@@ -21,6 +21,7 @@ That script:
 - removes the deprecated `npm:pi-review-loop` package entry so the bundled repo version is used instead
 - links `global/CLAUDE.md` into `~/.claude/CLAUDE.md` when Claude Code or Amp is installed
 - links individual skills into `~/.claude/skills/` when Claude Code or Amp is installed (each skill becomes a `/<name>` slash command in Claude Code)
+- installs the `npm:@deevus/pi-zmx` Pi package so zmx tools are available
 
 ## Repository layout
 
@@ -43,8 +44,8 @@ Available skills in [`skills`](skills):
 - [`/native-web-search`](skills/native-web-search) - web search via Anthropic or OpenAI Codex models with source URLs
 - [`/pymol-pml-scripting`](skills/pymol-pml-scripting) - generate correct PyMOL `.pml` scripts for molecular visualization
 - [`/svg`](skills/svg) - create and validate SVG files
-- [`/tmux`](skills/tmux) - drive tmux sessions programmatically
 - [`/uv`](skills/uv) - use `uv` for Python environments, dependencies, and scripts
+- [`/zmx`](skills/zmx) - persistent terminal sessions through the `pi-zmx` tools; use this for subagents/workers too
 - [`/web-browser`](skills/web-browser) - browser automation via Chrome DevTools Protocol
 
 ## Pi extensions
@@ -77,6 +78,10 @@ This repo currently uses two extension locations:
 - [`uv.ts`](.pi/extensions/uv.ts) - uv-aware Python workflow helpers
 - [`vim.ts`](.pi/extensions/vim.ts) - Vim-style editing helpers for the Pi interface
 - [`whimsical.ts`](.pi/extensions/whimsical.ts) - replaces the default thinking message with whimsical status text
+
+### Installed Pi packages
+
+- [`npm:@deevus/pi-zmx`](https://github.com/deevus/pi-zmx) - registers `zmx_run`, `zmx_history`, `zmx_list`, `zmx_kill`, `zmx_wait`, `zmx_attach`, and `/zmx`. Requires the `zmx` binary from <https://zmx.sh/> on `PATH`. Spawn subagents/workers in named zmx sessions so they can be attached, inspected, and cleaned up.
 
 ## Notify webhook fallback setup
 
@@ -135,4 +140,5 @@ These command files need customization before use. They live in [`plumbing-comma
 
 - The repo-bundled review loop now lives at `global/extensions/pi-review-loop`.
 - If you previously installed `pi-review-loop` through Pi's package manager, `./setup.sh` removes that package reference from Pi settings so the repo version wins.
+- `./setup.sh` adds `npm:@deevus/pi-zmx` to Pi settings; install `zmx` itself with `brew install neurosnap/tap/zmx` or a binary from <https://zmx.sh/#binaries>.
 - `.pi/extensions/package.json` contains the shared runtime dependencies used by the project-local extensions.

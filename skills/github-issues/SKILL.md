@@ -155,13 +155,13 @@ Multiple pi sessions can work on different issues simultaneously. Each issue get
 
 ### Architecture: Coordinator + Workers
 
-One session acts as the **coordinator** (the session the user is talking to). It spawns **worker sessions** via tmux, one per issue, each running in its own worktree.
+One session acts as the **coordinator** (the session the user is talking to). It spawns **worker sessions** via zmx, one per issue, each running in its own worktree.
 
 #### Coordinator Responsibilities
 1. Triage and prioritize issues (Phase 1)
 2. Create worktrees for selected issues (Phase 2)
 3. Create a todo per issue for tracking
-4. Spawn worker sessions via tmux
+4. Spawn worker sessions via zmx
 5. Monitor progress and report back to the user
 
 #### Worker Responsibilities
@@ -184,39 +184,28 @@ todo(action="create", title="Issue #43: Add type hints to utils", status="open",
 
 Create a worktree per issue as described in Phase 2. Each worker will operate exclusively in its worktree.
 
-### Step 3: Spawn Workers via tmux
+### Step 3: Spawn Workers via zmx
 
-Pi is an interactive TUI — it cannot be backgrounded directly. Use **tmux** to spawn each worker in its own pane. Read the `tmux` skill for full details on socket conventions and safe input sending.
+Pi is an interactive TUI — start each worker in its own persistent zmx session.
 
 ```bash
-# Set up tmux socket (per tmux skill conventions)
-SOCKET_DIR=${TMPDIR:-/tmp}/claude-tmux-sockets
-mkdir -p "$SOCKET_DIR"
-SOCKET="$SOCKET_DIR/claude.sock"
-
-# Spawn a worker for issue #42
 WORKTREE="/path/to/repo-issue-42"
-tmux -S "$SOCKET" new -d -s issue-42 -c "$WORKTREE"
+zmx run issue-42 -d sh -lc "cd '$WORKTREE' && exec pi \"/name issue-42\" \"Read ISSUE_CONTEXT.md and solve this issue. Claim TODO-<id> before starting. When done, update the todo to done and write RESULT.md. Do not open a PR.\""
 ```
 
-Then start pi inside the tmux session with an initial prompt. The prompt must tell the worker to:
+The prompt must tell the worker to:
 1. Set its session name with `/name` (so the coordinator can address it by name later)
 2. Claim its todo
 3. Do the work
 
-```bash
-# Start pi with initial instructions inside the tmux session
-tmux -S "$SOCKET" send-keys -t issue-42 "pi \"/name issue-42\" \"Read ISSUE_CONTEXT.md and solve this issue. Claim TODO-<id> before starting. When done, update the todo to done and write RESULT.md. Do not open a PR.\"" Enter
-```
-
 **Important:** The `/name issue-42` message sets the pi session's display name. This is what makes the session addressable via `send_to_session(sessionName="issue-42")`. Without it, you must use the session's UUID from `list_sessions` instead.
 
-Repeat for each issue. Tell the user how to monitor tmux:
+Repeat for each issue. Tell the user how to monitor zmx:
 
 ```
 To watch a worker yourself:
-  tmux -S /tmp/claude-tmux-sockets/claude.sock attach -t issue-42
-Detach with Ctrl+b d.
+  zmx attach issue-42
+Detach with Ctrl+\\ or close the terminal.
 ```
 
 ### Step 4: Monitor Progress
@@ -278,8 +267,8 @@ The coordinator reads `RESULT.md` from each worktree and summarizes results for 
 When the user is satisfied and has reviewed the worktrees:
 
 ```bash
-# Kill all worker tmux sessions
-tmux -S "$SOCKET" kill-server
+# Kill worker zmx sessions
+zmx kill issue-42 issue-43 --force
 
 # Worktrees and branches persist for the human to review, push, and PR
 ```
@@ -310,5 +299,5 @@ The coordinator can then:
 
 - Workers are independent pi sessions with their own context windows. They can hit compaction, rate limits, or context overflow just like any session.
 - The coordinator cannot see a worker's full conversation — only summaries via `get_summary`, files on disk, and todo updates.
-- If a worker's pi session crashes or disconnects, its tmux session will still exist (showing the exit). The coordinator can detect this because `list_sessions` will no longer show the session. Restart by sending a new `pi` command into the same tmux session.
+- If a worker's pi session crashes or disconnects, its zmx session will still exist (showing the exit). The coordinator can detect this because `list_sessions` will no longer show the session. Restart with `zmx run <session> -d ...`.
 - For very large issues, a single worker may exhaust its context. The `PLAN.md` → incremental commit approach helps: even if the session dies, progress is preserved in git commits.

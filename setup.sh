@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PI_AGENT_DIR="$HOME/.pi/agent"
 PI_SETTINGS="$PI_AGENT_DIR/settings.json"
 CLAUDE_DIR="$HOME/.claude"
+ZMX_PACKAGE="npm:@deevus/pi-zmx"
 
 echo "=== agent-stuff setup ==="
 echo "Source: $SCRIPT_DIR"
@@ -124,18 +125,19 @@ if command -v jq &>/dev/null; then
     existing=$(jq -r '.extensions // []' "$PI_SETTINGS")
     merged=$(echo "$existing" | jq --arg repo "$SCRIPT_DIR" '[.[] | select(startswith($repo) | not)]' | jq --argjson new "$ext_json" '. + $new | unique')
 
-    jq --argjson exts "$merged" '
+    jq --argjson exts "$merged" --arg zmx "$ZMX_PACKAGE" '
         .extensions = $exts
         | .enableSkillCommands = true
-        | .packages = ((.packages // []) | map(select(
+        | .packages = (((.packages // []) | map(select(
             . != "npm:pi-review-loop"
             and . != "pi-review-loop"
             and ((type != "object") or ((.source // "") != "npm:pi-review-loop" and (.source // "") != "pi-review-loop"))
-        )))
+        ))) as $pkgs
+        | if ($pkgs | any((type == "string" and . == $zmx) or (type == "object" and .source == $zmx))) then $pkgs else $pkgs + [$zmx] end)
     ' \
         "$PI_SETTINGS" > "$PI_SETTINGS.tmp" && mv "$PI_SETTINGS.tmp" "$PI_SETTINGS"
 
-    echo "  merged     $PI_SETTINGS ($(echo "$merged" | jq -r 'length') extensions)"
+    echo "  merged     $PI_SETTINGS ($(echo "$merged" | jq -r 'length') extensions, $ZMX_PACKAGE package)"
 else
     echo "  WARNING    jq not found, skipping settings.json merge"
     echo "             install jq or manually add extensions to $PI_SETTINGS"
@@ -195,6 +197,12 @@ if command -v claude &>/dev/null || command -v amp &>/dev/null || [ -d "$CLAUDE_
         fi
     done
     shopt -u nullglob
+    for stale in "$CLAUDE_SKILLS_DIR/tmux" "$CLAUDE_SKILLS_DIR/tmux.bak"; do
+        if [ -L "$stale" ] && readlink "$stale" | grep -q "$SCRIPT_DIR/skills/tmux"; then
+            rm "$stale"
+            echo "  removed    $stale"
+        fi
+    done
     echo ""
 fi
 
@@ -361,4 +369,7 @@ echo ""
 echo "Settings extensions:"
 if command -v jq &>/dev/null && [ -f "$PI_SETTINGS" ]; then
     jq -r '.extensions[]? // empty' "$PI_SETTINGS" | while read -r f; do echo "  $(basename "$f")"; done
+    echo ""
+    echo "Settings packages:"
+    jq -r '.packages[]? | if type == "string" then . else .source end' "$PI_SETTINGS" | while read -r p; do echo "  $p"; done
 fi
