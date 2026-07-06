@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { domainMatches, normalizeDomain, shellQuote } from "./common.mjs";
+import { defaultLspServers, formatLspStatus } from "./lsp.mjs";
 import { buildDomainRestrictedQuery, filterSourcesByDomains, DEFAULT_SEARCH_DOMAINS } from "./web-search.mjs";
 import { buildSubagentLaunch, normalizeSubagentTasks } from "./subagent.mjs";
 
@@ -21,5 +22,7 @@ assert.deepEqual(normalizeSubagentTasks({ assignment: "do x" }), [{ assignment: 
 assert.equal(normalizeSubagentTasks({ tasks: [{ id: "a", assignment: "do a" }] })[0].id, "a");
 assert.match(buildSubagentLaunch({ sessionName: "worker-a", cwd: "/tmp/x", assignment: "do it", context: "ctx" }), /pi --session-control/);
 assert.match(buildSubagentLaunch({ sessionName: "worker-a", cwd: "/tmp/x", assignment: "do it", context: "ctx" }), /\/name worker-a/);
+assert.ok(defaultLspServers.some((server) => server.name === "typescript-language-server"));
+assert.match(formatLspStatus([{ name: "x", available: false, command: "x", fileTypes: [".x"] }]), /x.*missing/);
 
 console.log("omp-lite helper self-check passed");

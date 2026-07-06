@@ -4,7 +4,8 @@ import { Type } from "@sinclair/typebox";
 import { StringEnum } from "@mariozechner/pi-ai";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Filesystem, InMemorySnapshotStore, Patch, Patcher, normalizeToLF, stripBom } from "@oh-my-pi/hashline";
-import { resolveInside } from "./lib/omp-lite/common.mjs";
+import { run, which, resolveInside } from "./lib/omp-lite/common.mjs";
+import { detectLspServers, formatLspStatus, runDiagnostics } from "./lib/omp-lite/lsp.mjs";
 import { buildSubagentLaunch, formatSubagentResult, makeSessionName, normalizeSubagentTasks } from "./lib/omp-lite/subagent.mjs";
 import { searchWeb } from "./lib/omp-lite/web-search.mjs";
 
@@ -76,6 +77,19 @@ class CwdFilesystem extends Filesystem {
 
 const HashlineReadParams = Type.Object({ path: Type.String({ description: "File path to read and snapshot" }) });
 const HashlineEditParams = Type.Object({ input: Type.String({ description: "Hashline patch input" }) });
+const AstEditParams = Type.Object({
+  paths: Type.Array(Type.String({ description: "Files or directories to rewrite" })),
+  ops: Type.Array(Type.Object({
+    pat: Type.String({ description: "ast-grep pattern" }),
+    out: Type.String({ description: "replacement; empty string deletes matches" }),
+  })),
+  apply: Type.Optional(Type.Boolean({ description: "Apply changes; default false previews command only" })),
+});
+
+const LspParams = Type.Object({
+  action: StringEnum(["status", "config", "diagnostics"] as const),
+  file: Type.Optional(Type.String({ description: "Reserved for future file-scoped LSP actions" })),
+});
 
 export default function ompLite(pi: ExtensionAPI): void {
   const snapshots = new InMemorySnapshotStore();
@@ -160,6 +174,39 @@ export default function ompLite(pi: ExtensionAPI): void {
         .map((section) => `${section.header}\n${section.op}${section.firstChangedLine ? ` firstChangedLine=${section.firstChangedLine}` : ""}${section.warnings.length ? `\nWarnings:\n${section.warnings.join("\n")}` : ""}`)
         .join("\n\n");
       return { content: [{ type: "text", text }], details: result };
+    },
+  });
+
+  pi.registerTool({
+    name: "ast_edit",
+    label: "AST Edit",
+    description: "Preview or apply simple ast-grep structural rewrites. Requires ast-grep/sg on PATH.",
+    promptSnippet: "Preview/apply simple ast-grep structural rewrites",
+    parameters: AstEditParams,
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      const bin = await which(["ast-grep", "sg"]);
+      if (!bin) return { content: [{ type: "text", text: "Error: ast_edit requires ast-grep (`brew install ast-grep` or install `sg`)." }], details: { success: false } };
+      if (params.ops.length !== 1) return { content: [{ type: "text", text: "Error: MVP ast_edit accepts exactly one op per call." }], details: { success: false } };
+      const op = params.ops[0];
+      const args = ["run", "--pattern", op.pat, "--rewrite", op.out, ...(params.apply ? ["--update-all"] : []), ...params.paths];
+      const result = await run(bin, args, { cwd: ctx.cwd, timeoutMs: 60_000 });
+      return { content: [{ type: "text", text: `$ ${bin} ${args.join(" ")}\n${result.stdout}${result.stderr ? `\n${result.stderr}` : ""}` }], details: { success: result.code === 0, code: result.code, args } };
+    },
+  });
+
+  pi.registerTool({
+    name: "lsp",
+    label: "LSP",
+    description: "Lightweight LSP-inspired status/config/diagnostics checks. Does not run a long-lived JSON-RPC LSP client.",
+    promptSnippet: "Check lightweight language server status and project diagnostics",
+    parameters: LspParams,
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      if (params.action === "status" || params.action === "config") {
+        const servers = await detectLspServers(ctx.cwd);
+        return { content: [{ type: "text", text: formatLspStatus(servers) }], details: { servers } };
+      }
+      const result = await runDiagnostics(ctx.cwd);
+      return { content: [{ type: "text", text: result.text }], details: result.details };
     },
   });
 }
