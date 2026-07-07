@@ -58,7 +58,6 @@ This repo currently uses two extension locations:
 ### Global extensions
 
 - [`pi-review-loop`](global/extensions/pi-review-loop) - persistent automated self-review loop for Pi. Supports pause/resume on interruption, resumes after steering or follow-up user messages, survives compaction, and is bundled directly in this repo instead of being installed through `pi install npm:pi-review-loop`.
-- [`auto-commit-on-exit.ts`](global/extensions/auto-commit-on-exit.ts) - creates a git commit automatically when a session exits
 
 ### Project-local extensions
 
