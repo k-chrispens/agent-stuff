@@ -207,6 +207,20 @@ if command -v claude &>/dev/null || command -v amp &>/dev/null || [ -d "$CLAUDE_
 fi
 
 # ---------------------------------------------------------------------------
+# Zed Agent: ~/.agents/skills/<name> -> repo skills/<name> (per skill)
+# ---------------------------------------------------------------------------
+ZED_SKILLS_DIR="$HOME/.agents/skills"
+mkdir -p "$ZED_SKILLS_DIR"
+shopt -s nullglob
+for skill_dir in "$SCRIPT_DIR/skills/"*/; do
+    [ -f "$skill_dir/SKILL.md" ] || continue
+    skill_name="$(basename "$skill_dir")"
+    link "${skill_dir%/}" "$ZED_SKILLS_DIR/$skill_name"
+done
+shopt -u nullglob
+echo ""
+
+# ---------------------------------------------------------------------------
 # Claude Code: review-loop hook and state directory
 # ---------------------------------------------------------------------------
 if command -v claude &>/dev/null || [ -d "$CLAUDE_DIR" ]; then
@@ -362,6 +376,12 @@ done
 echo ""
 echo "Skills (Claude Code / Amp):"
 for f in "$CLAUDE_DIR/skills/"*/; do
+    [ -L "${f%/}" ] && [ -f "$f/SKILL.md" ] || continue
+    echo "  $(basename "$f")"
+done
+echo ""
+echo "Skills (Zed Agent):"
+for f in "$ZED_SKILLS_DIR/"*/; do
     [ -L "${f%/}" ] && [ -f "$f/SKILL.md" ] || continue
     echo "  $(basename "$f")"
 done
