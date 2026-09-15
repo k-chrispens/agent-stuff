@@ -3,5 +3,6 @@ package-lock.json
 .pi/todos
 /.cache/
 /.worktrees/
+/skills/actl
 /skills/blueprint
 /skills/blueprint-generate

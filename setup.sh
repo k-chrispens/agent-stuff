@@ -90,6 +90,16 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Symlink external skills into repo (gitignored, source of truth elsewhere)
+# ---------------------------------------------------------------------------
+EXTERNAL_SKILLS=("$HOME/.claude/skills/actl")
+for ext_skill in "${EXTERNAL_SKILLS[@]}"; do
+    [ -d "$ext_skill" ] || continue
+    skill_name="$(basename "$ext_skill")"
+    link "$ext_skill" "$SCRIPT_DIR/skills/$skill_name"
+done
+
+# ---------------------------------------------------------------------------
 # ~/.pi/agent/extensions -> repo global/extensions
 # ---------------------------------------------------------------------------
 mkdir -p "$PI_AGENT_DIR"
@@ -186,6 +196,11 @@ if command -v claude &>/dev/null || command -v amp &>/dev/null || [ -d "$CLAUDE_
     for skill_dir in "$SCRIPT_DIR/skills/"*/; do
         [ -f "$skill_dir/SKILL.md" ] || continue
         skill_name="$(basename "$skill_dir")"
+        # Skip skills that are already symlinked FROM ~/.claude/skills (external skills)
+        if [ -L "${skill_dir%/}" ] && readlink "${skill_dir%/}" | grep -q "^$HOME/.claude/skills/"; then
+            echo "  skip       $skill_name (external, already in ~/.claude/skills)"
+            continue
+        fi
         link "${skill_dir%/}" "$CLAUDE_SKILLS_DIR/$skill_name"
         # Amp-specific: its loader picks up SKILL.md from *.bak directories,
         # which would shadow our symlink. Only clean up .bak when Amp is
