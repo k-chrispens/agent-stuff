@@ -30,6 +30,15 @@ Since interactive widgets are displayed in (nested) tooltips/expanded readings a
 
 See also: https://www.lesswrong.com/posts/B7P97C27rvHPz3s9B/gears-in-understanding
 
+To design each widget, apply the `interactive-figures` skill's interaction rules (SKILL.md, "Interaction rules"), with the evidence in its `references/design.md` and patterns in `references/idioms.md`:
+
+- the default state shows the point;
+- each control answers a question;
+- at most three controls;
+- keyboard access and no hover-only content.
+
+Its gate ("should this be interactive at all?") is written for figures in the main reading flow. Widgets here sit in opt-in expanded readings and tooltips, so the "more is better" guidance above still holds. Take its design rules, not its templates or tools: those target standalone HTML files, not this React app. For molecules or density maps inside a widget, its `references/molstar.md` covers Mol\* and MolViewSpec.
+
 ## Nested tooltips
 
 Nested tooltips are a great way to explain concepts with long dependency chains, with a similar UX to Paradox Interactive's grand strategy games.

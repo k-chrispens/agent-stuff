@@ -10,8 +10,8 @@ description: |
   grouping pitfalls, outline rendering via ray_trace_mode, color-by-element, chain
   break hiding, the alt-loc backbone-break cartoon fix, and more.
 author: Claude Code
-version: 1.1.0
-date: 2026-06-04
+version: 1.2.0
+date: 2026-10-06
 ---
 
 # PyMOL .pml Script Generation
@@ -224,6 +224,10 @@ color good_teal, my_object
 Also note any global settings (bg_color, ray_trace_mode, lighting) that the
 .pymolrc sets, to avoid overriding them unnecessarily.
 
+The same palette, with hex values, line shades and contrast rules for flat
+schematics, is in the `figure-design` skill's `references/palette.md`. Use it
+when a render sits next to drawn elements, so the two share colors.
+
 ### Rule 11: Alt-loc backbone breaks the cartoon
 
 **Symptom:** the cartoon renders as disconnected fragments or stray loops
@@ -403,6 +407,12 @@ zoom
   Use explicit object names for `group`.
 - Test that PyMOL can find all files by verifying paths before writing the
   script. Use Glob to confirm file existence.
+- PyMOL has no interactive web export. For an interactive or web version of a
+  scene (rotate, toggle models, scrub a density contour), use the
+  `interactive-figures` skill. Its `references/molstar.md` has a
+  PyMOL→MolViewSpec translation table and the alt-loc selector.
+- For a render that is one panel of a schematic figure, ray-trace with
+  `set ray_opaque_background, 0` and composite it in the `figure-design` skill.
 
 ## References
 

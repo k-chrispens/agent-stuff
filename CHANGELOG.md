@@ -4,6 +4,17 @@ All notable changes to agent-stuff are documented here.
 
 ## Unreleased
 
+* Added `figure-design` skill: whiteboard-style design of conceptual figures:
+  - ASCII concepts before any drawing;
+  - text-free drafts, one version per turn;
+  - a palette derived from `.pymolrc`, with line shades;
+  - `tools/look.py` (rasterize and lint) and `tools/preview.py` (live-reload viewer).
+* Added `interactive-figures` skill: single interactive scientific figures as one offline HTML file:
+  - D3/SVG and Mol*/MolViewSpec templates sharing a state contract (URL hash, arrow-key states, talk mode, iframe auto-height);
+  - `tools/check.py`: screenshots every state, checks the contract, accessibility and offline use, and exports pixel-verified SVG stills;
+  - `tools/bundle.py`: inlines libraries and data;
+  - `tools/preview.py`: live-reload viewer.
+* `pymol-pml-scripting` and `interactive-textbook` now point to the new figure skills.
 * Migrated extensions for pi 0.62.0 breaking changes:
   - Replaced `getEditorKeybindings()` with `getKeybindings()` in todos and files extensions.
   - Updated all keybinding IDs to namespaced format (e.g. `"selectConfirm"` → `"tui.select.confirm"`, `"expandTools"` → `"app.tools.expand"`).

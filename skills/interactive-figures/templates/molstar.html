@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>figure</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/molstar@5.13.0/build/viewer/molstar.css">
+<script src="https://cdn.jsdelivr.net/npm/molstar@5.13.0/build/viewer/molstar.js"></script>
+<style>
+  :root { --paper: #ffffff; --ink: #4d4d4d; --scaffold: #a6a6a6; --faint: #f2f2f2; }
+  html, body { margin: 0; background: var(--paper); color: var(--ink); font: 15px/1.4 system-ui, sans-serif; }
+  #figure { margin: 0 auto; max-width: 960px; padding: 16px; box-sizing: border-box; }
+  .controls { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; padding: 12px 0; }
+  .toggle { display: inline-flex; border: 1px solid var(--scaffold); border-radius: 6px; overflow: hidden; }
+  .toggle button { all: unset; cursor: pointer; padding: 6px 14px; min-height: 24px; }
+  .toggle button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+  .toggle button:focus-visible, input:focus-visible, .stage:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  label { display: inline-flex; gap: 8px; align-items: center; }
+  input[type="range"] { accent-color: var(--ink); width: 200px; min-height: 24px; }
+  input:disabled { opacity: 0.35; }
+  .talk #figure { max-width: none; height: 100vh; display: flex; flex-direction: column; font-size: clamp(15px, 1.5vw, 32px); }
+  .talk input[type="range"] { width: 20vw; }
+  .talk figcaption { display: none; }
+  .embedded .stage { max-height: none; }
+  .talk .stage { flex: 1; min-height: 0; aspect-ratio: auto; max-height: none; }
+  .stage { position: relative; width: 100%; aspect-ratio: 4 / 3; max-height: 80vh; } /* the vh cap is lifted by .embedded below */
+  .msp-viewport-controls, .msp-viewport-top-left-controls, .msp-state-snapshot-viewport-controls { display: none !important; }
+  .msp-plugin .msp-layout-standard { border: none; }
+</style>
+</head>
+<body>
+<figure id="figure" aria-label="">
+  <div class="stage" id="stage" role="img" aria-label=""></div>
+  <div class="controls">
+    <div class="toggle" role="group" aria-label="model">
+      <button data-model="single">single</button>
+      <button data-model="ensemble">ensemble</button>
+    </div>
+    <label>contour <input id="sigma" type="range" min="2" max="10" step="0.5"></label>
+  </div>
+  <figcaption></figcaption>
+</figure>
+<script>
+// ---- figure: edit from here ----
+// Example data (templates/example/): Lys4 has conformers A and B in ensemble.cif; single.cif has A only.
+// Simulated: map.ccp4 is calculated from ensemble.cif, so it is not evidence. Real figures use the observed map.
+// Contours are in sigma of this (whole-cell) map; side chains sample at 6-7 sigma, backbone at 13-21 sigma.
+const STATES = {
+  default: { model: 'ensemble', sigma: 3 },
+  single: { model: 'single', sigma: 3 },
+  high_contour: { model: 'ensemble', sigma: 5 },
+  side_chains_gone: { model: 'ensemble', sigma: 7 },
+};
+const LIMITS = { sigma: [2, 10] }; // hash values are clamped to these ranges; match the slider
+const COLORS = { ink: '#4d4d4d', scaffold: '#a6a6a6', conformer: '#46a39a' };
+// Alternate location B, as a MolQL selector (Mol*-only MolViewSpec extension; plain MVS has no altloc selector)
+const sym = name => ({ name });
+const ALTLOC_B = { molql: { head: sym('structure-query.generator.atom-groups'), args: { 'atom-test': { head: sym('core.rel.eq'),
+  args: [{ head: sym('structure-query.atom-property.macromolecular.label_alt_id') }, 'B'] } } } };
+const CAMERA_KEY = 'camera:' + location.pathname.replace(/v\d+\.html$/, '');
+let viewer, framed = false;
+
+async function init() {
+  viewer = await molstar.Viewer.create('stage', {
+    layoutIsExpanded: false, layoutShowControls: false, layoutShowSequence: false, layoutShowLog: false,
+    layoutShowLeftPanel: false, layoutShowRemoteState: false, viewportShowExpand: false,
+    viewportShowSelectionMode: false, viewportShowAnimation: false, viewportShowControls: false,
+    viewportShowSettings: false, viewportShowReset: false, viewportShowScreenshotControls: false,
+    viewportShowToggleFullscreen: false, viewportShowTrajectoryControls: false, viewportBackgroundColor: 'white',
+  });
+  viewer.plugin.canvas3d.setProps({ camera: { helper: { axes: { name: 'off', params: {} } } } });
+  if (FAST) viewer.plugin.canvas3d.setProps({ multiSample: { mode: 'off' } });
+  const saveCamera = () => { try { sessionStorage.setItem(CAMERA_KEY, JSON.stringify(viewer.plugin.canvas3d.camera.getSnapshot())); } catch (e) {} };
+  addEventListener('pagehide', saveCamera);
+  document.getElementById('stage').addEventListener('pointerup', saveCamera);
+  document.querySelectorAll('[data-model]').forEach(b => b.onclick = () => figure.set({ model: b.dataset.model }));
+  const sigma = document.getElementById('sigma');
+  sigma.oninput = () => figure.set({ sigma: +sigma.value });
+}
+
+const node = (kind, params = {}, ...children) => ({ kind, params, children });
+
+function scene(s) {
+  return {
+    root: node('root', {},
+      node('canvas', { background_color: 'white' }),
+      node('download', { url: assetUrl(`assets/${s.model}.cif`) }, node('parse', { format: 'mmcif' }, node('structure', { type: 'model' },
+        node('component', { selector: 'all' }, node('representation', { type: 'ball_and_stick' },
+          node('color', { color: COLORS.ink }),
+          node('color', { selector: ALTLOC_B, color: COLORS.conformer }))),
+        node('component', { selector: { label_seq_id: 4 } }, node('focus', { radius_factor: 1.2 }))))),
+      node('download', { url: assetUrl('assets/map.ccp4') }, node('parse', { format: 'map' }, node('volume', {},
+        node('volume_representation', { type: 'isosurface', relative_isovalue: s.sigma, show_wireframe: true, show_faces: false },
+          node('color', { color: COLORS.scaffold }),
+          node('opacity', { opacity: innerWidth < 600 ? 0.5 : 1 })))))),
+    metadata: { version: '1', timestamp: new Date().toISOString() },
+  };
+}
+
+async function render(s) {
+  await viewer.loadMvsData(JSON.stringify(scene(s)), 'mvsj', { keepCamera: framed, sanityChecks: false });
+  if (!framed) {
+    framed = true;
+    let saved = null;
+    try { saved = sessionStorage.getItem(CAMERA_KEY); } catch (e) {}
+    if (saved) await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => { viewer.plugin.canvas3d.camera.setState(JSON.parse(saved), 0); r(); })));
+  }
+}
+
+function sync(s) {
+  document.querySelectorAll('[data-model]').forEach(b => b.setAttribute('aria-pressed', b.dataset.model === s.model));
+  document.getElementById('sigma').value = s.sigma;
+}
+// ---- figure contract: keep as is ----
+const QUERY = new URLSearchParams(location.search);
+const FAST = QUERY.has('fast'); // set by check.py: skip expensive progressive rendering
+if (QUERY.has('talk')) document.documentElement.classList.add('talk'); // full-screen presenting
+if (parent !== window) document.documentElement.classList.add('embedded'); // sized by the host page
+const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+function assetUrl(path) {
+  const inlined = window.__ASSETS__ && window.__ASSETS__[path];
+  if (!inlined) return path;
+  assetUrl.cache = assetUrl.cache || {};
+  return assetUrl.cache[path] = assetUrl.cache[path]
+    || URL.createObjectURL(new Blob([Uint8Array.from(atob(inlined), c => c.charCodeAt(0))]));
+}
+const figure = (() => {
+  const names = Object.keys(STATES);
+  const limits = typeof LIMITS === 'object' && LIMITS ? LIMITS : {};
+  function parse(key, raw) {
+    const like = STATES.default[key], limit = limits[key];
+    if (typeof like === 'number') {
+      const value = Number(raw);
+      if (!raw.trim() || !Number.isFinite(value)) return undefined;
+      if (names.some(n => STATES[n][key] === value)) return value; // named-state values (and sentinels like -1) bypass LIMITS
+      return Array.isArray(limit) ? Math.min(limit[1], Math.max(limit[0], value)) : value;
+    }
+    if (typeof like === 'boolean') return raw === 'true' ? true : raw === 'false' ? false : undefined;
+    const allowed = Array.isArray(limit) ? limit : names.map(n => STATES[n][key]);
+    return allowed.includes(raw) ? raw : undefined;
+  }
+  const fromHash = () => Object.fromEntries([...new URLSearchParams(location.hash.slice(1))]
+    .filter(([k]) => Object.hasOwn(STATES.default, k)).map(([k, v]) => [k, parse(k, v)]).filter(([, v]) => v !== undefined));
+  const toHash = s => new URLSearchParams(Object.entries(s).filter(([k, v]) => v !== STATES.default[k])).toString();
+  const named = s => names.findIndex(n => Object.entries(STATES[n]).every(([k, v]) => s[k] === v));
+  let state = { ...STATES.default, ...fromHash() }, last = Math.max(0, named(state));
+  let running = null, dirty = false, inited = false, lastWrite = 0, pendingWrite = 0;
+  function flushHash() {
+    clearTimeout(pendingWrite);
+    pendingWrite = 0;
+    lastWrite = Date.now();
+    const hash = toHash(state);
+    try { history.replaceState(null, '', hash ? `#${hash}` : location.pathname + location.search); } catch (e) {} // opaque-origin frames forbid it
+  }
+  function writeHash() { // throttled: Safari throws after 100 replaceState calls in 30 s
+    if (pendingWrite) return;
+    const wait = 300 - (Date.now() - lastWrite);
+    if (wait <= 0) flushHash(); else pendingWrite = setTimeout(flushHash, wait);
+  }
+  addEventListener('pagehide', () => { if (pendingWrite) flushHash(); });
+  async function flush() {
+    if (!inited) return ready;
+    if (running) { dirty = true; return running; }
+    running = (async () => { do { dirty = false; sync(state); await render(state); } while (dirty); })();
+    try { await running; } finally {
+      running = null;
+      if (parent !== window) parent.postMessage({ figureHeight: Math.ceil(document.body.getBoundingClientRect().height) }, '*');
+    }
+  }
+  function set(patch) {
+    state = { ...state, ...patch };
+    if (named(state) >= 0) last = named(state);
+    writeHash();
+    return flush();
+  }
+  addEventListener('keydown', e => {
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || (e.target.closest && e.target.closest('input, select, textarea'))) return;
+    if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+    const from = named(state) >= 0 ? named(state) : last;
+    set(STATES[names[Math.max(0, Math.min(names.length - 1, from + (e.key === 'ArrowRight' ? 1 : -1)))]]);
+  });
+  let width = innerWidth; // height-only changes (mobile toolbars) don't change the layout
+  addEventListener('resize', () => { if (innerWidth !== width) { width = innerWidth; flush(); } });
+  const ready = Promise.resolve().then(init).then(() => { inited = true; return flush(); });
+  return { states: STATES, get: () => ({ ...state }), set, ready, flushHash };
+})();
+window.figure = figure;
+</script>
+</body>
+</html>

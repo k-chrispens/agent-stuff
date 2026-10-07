@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>figure</title>
+<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+<style>
+  :root { --paper: #ffffff; --ink: #4d4d4d; --scaffold: #a6a6a6; --faint: #f2f2f2; }
+  html, body { margin: 0; background: var(--paper); color: var(--ink); font: 15px/1.4 system-ui, sans-serif; }
+  #figure { margin: 0 auto; max-width: 960px; padding: 16px; box-sizing: border-box; }
+  .controls { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; padding: 12px 0; }
+  .toggle { display: inline-flex; border: 1px solid var(--scaffold); border-radius: 6px; overflow: hidden; }
+  .toggle button { all: unset; cursor: pointer; padding: 6px 14px; min-height: 24px; }
+  .toggle button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+  .toggle button:focus-visible, input:focus-visible, .stage:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  label { display: inline-flex; gap: 8px; align-items: center; }
+  input[type="range"] { accent-color: var(--ink); width: 200px; min-height: 24px; }
+  input:disabled { opacity: 0.35; }
+  .talk #figure { max-width: none; height: 100vh; display: flex; flex-direction: column; font-size: clamp(15px, 1.5vw, 32px); }
+  .talk input[type="range"] { width: 20vw; }
+  .talk figcaption { display: none; }
+  .embedded .stage { max-height: none; }
+  .talk .stage { flex: 1; min-height: 0; aspect-ratio: auto; max-height: none; }
+  .stage > svg { display: block; width: 100%; height: auto; }
+  .talk .stage > svg { height: 100%; }
+</style>
+</head>
+<body>
+<figure id="figure" aria-label="">
+  <div class="stage" role="img" aria-label="">
+    <svg class="figure-svg" viewBox="0 0 640 240"></svg>
+  </div>
+  <div class="controls">
+    <div class="toggle" role="group" aria-label="model">
+      <button data-model="single">single</button>
+      <button data-model="ensemble">ensemble</button>
+    </div>
+    <label>occupancy <input id="occupancy" type="range" min="0" max="1" step="0.05"></label>
+  </div>
+  <figcaption></figcaption>
+</figure>
+<script>
+// ---- figure: edit from here ----
+// Example: density sampled along the arc swept by a lysine side chain. The observed profile has two peaks
+// (two conformers); the model is either the single conformer or the occupancy-weighted ensemble.
+// Simulated data: the profile is a sum of Gaussians, not a measurement.
+const STATES = {
+  default: { model: 'ensemble', occupancy: 0.5 },
+  single: { model: 'single', occupancy: 0.5 },
+  wrong_occupancy: { model: 'ensemble', occupancy: 0.15 },
+};
+const LIMITS = { occupancy: [0, 1] }; // hash values are clamped to these ranges
+const COLORS = { paper: '#ffffff', ink: '#4d4d4d', scaffold: '#a6a6a6', faint: '#f2f2f2', accent: '#4b5faa', misfit: '#ffc6b2' };
+const W = 640, BASE = 200, CONFORMERS = [0.32, 0.68];
+const xs = d3.range(0, 1.0001, 0.005);
+const gauss = (v, mu) => Math.exp(-((v - mu) ** 2) / (2 * 0.06 ** 2));
+const observed = xs.map(v => 0.5 * gauss(v, CONFORMERS[0]) + 0.5 * gauss(v, CONFORMERS[1]));
+const x = d3.scaleLinear([0, 1], [40, W - 40]);
+const y = d3.scaleLinear([0, 1], [BASE, 30]);
+const svg = d3.select('#figure svg.figure-svg');
+let animate = false; // true only for discrete changes; continuous controls must redraw instantly
+
+function init() {
+  svg.append('line').attr('x1', x(0)).attr('x2', x(1)).attr('y1', BASE).attr('y2', BASE)
+    .attr('stroke', COLORS.scaffold).attr('stroke-width', 0.75);
+  svg.append('path').attr('d', d3.area((_, i) => x(xs[i]), BASE, y)(observed))
+    .attr('fill', COLORS.faint).attr('stroke', COLORS.scaffold).attr('stroke-width', 0.75);
+  svg.append('path').attr('class', 'misfit').attr('fill', COLORS.misfit);
+  svg.append('path').attr('class', 'ghost').attr('fill', 'none').attr('stroke', COLORS.ink)
+    .attr('stroke-width', 0.75).attr('stroke-dasharray', '3 3'); // the single model, so the default shows what it misses
+  svg.append('path').attr('class', 'model').attr('fill', 'none').attr('stroke-width', 2.25).attr('stroke-linejoin', 'round');
+  svg.selectAll('circle.conformer').data(CONFORMERS).join('circle').attr('class', 'conformer')
+    .attr('cx', d => x(d)).attr('cy', BASE).attr('stroke-width', 1);
+  document.querySelectorAll('[data-model]').forEach(b => b.onclick = () => { animate = true; figure.set({ model: b.dataset.model }); });
+  const occupancy = document.getElementById('occupancy');
+  occupancy.oninput = () => figure.set({ occupancy: +occupancy.value });
+}
+
+function render(s) {
+  const weights = s.model === 'single' ? [1, 0] : [1 - s.occupancy, s.occupancy];
+  const model = xs.map(v => weights[0] * gauss(v, CONFORMERS[0]) + weights[1] * gauss(v, CONFORMERS[1]));
+  const color = s.model === 'single' ? COLORS.ink : COLORS.accent;
+  const single = xs.map(v => gauss(v, CONFORMERS[0]));
+  const duration = animate && !reducedMotion() && !FAST ? 250 : 0;
+  animate = false;
+  svg.select('path.model').transition().duration(duration).attr('d', d3.line((_, i) => x(xs[i]), y)(model)).attr('stroke', color);
+  svg.select('path.ghost').attr('d', d3.line((_, i) => x(xs[i]), y)(single)).attr('visibility', s.model === 'single' ? 'hidden' : 'visible');
+  svg.select('path.misfit').transition().duration(duration)
+    .attr('d', d3.area((_, i) => x(xs[i]), (_, i) => y(Math.min(model[i], observed[i])), (_, i) => y(observed[i]))(xs));
+  svg.selectAll('circle.conformer').transition().duration(duration)
+    .attr('fill', (_, i) => weights[i] > 0 ? color : COLORS.paper)
+    .attr('stroke', (_, i) => weights[i] > 0 ? color : COLORS.scaffold)
+    .attr('r', (_, i) => 3 + 4 * Math.sqrt(weights[i]));
+}
+
+function sync(s) {
+  document.querySelectorAll('[data-model]').forEach(b => b.setAttribute('aria-pressed', b.dataset.model === s.model));
+  const occupancy = document.getElementById('occupancy');
+  occupancy.value = s.occupancy;
+  occupancy.disabled = s.model === 'single';
+}
+// ---- figure contract: keep as is ----
+const QUERY = new URLSearchParams(location.search);
+const FAST = QUERY.has('fast'); // set by check.py: skip expensive progressive rendering
+if (QUERY.has('talk')) document.documentElement.classList.add('talk'); // full-screen presenting
+if (parent !== window) document.documentElement.classList.add('embedded'); // sized by the host page
+const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+function assetUrl(path) {
+  const inlined = window.__ASSETS__ && window.__ASSETS__[path];
+  if (!inlined) return path;
+  assetUrl.cache = assetUrl.cache || {};
+  return assetUrl.cache[path] = assetUrl.cache[path]
+    || URL.createObjectURL(new Blob([Uint8Array.from(atob(inlined), c => c.charCodeAt(0))]));
+}
+const figure = (() => {
+  const names = Object.keys(STATES);
+  const limits = typeof LIMITS === 'object' && LIMITS ? LIMITS : {};
+  function parse(key, raw) {
+    const like = STATES.default[key], limit = limits[key];
+    if (typeof like === 'number') {
+      const value = Number(raw);
+      if (!raw.trim() || !Number.isFinite(value)) return undefined;
+      if (names.some(n => STATES[n][key] === value)) return value; // named-state values (and sentinels like -1) bypass LIMITS
+      return Array.isArray(limit) ? Math.min(limit[1], Math.max(limit[0], value)) : value;
+    }
+    if (typeof like === 'boolean') return raw === 'true' ? true : raw === 'false' ? false : undefined;
+    const allowed = Array.isArray(limit) ? limit : names.map(n => STATES[n][key]);
+    return allowed.includes(raw) ? raw : undefined;
+  }
+  const fromHash = () => Object.fromEntries([...new URLSearchParams(location.hash.slice(1))]
+    .filter(([k]) => Object.hasOwn(STATES.default, k)).map(([k, v]) => [k, parse(k, v)]).filter(([, v]) => v !== undefined));
+  const toHash = s => new URLSearchParams(Object.entries(s).filter(([k, v]) => v !== STATES.default[k])).toString();
+  const named = s => names.findIndex(n => Object.entries(STATES[n]).every(([k, v]) => s[k] === v));
+  let state = { ...STATES.default, ...fromHash() }, last = Math.max(0, named(state));
+  let running = null, dirty = false, inited = false, lastWrite = 0, pendingWrite = 0;
+  function flushHash() {
+    clearTimeout(pendingWrite);
+    pendingWrite = 0;
+    lastWrite = Date.now();
+    const hash = toHash(state);
+    try { history.replaceState(null, '', hash ? `#${hash}` : location.pathname + location.search); } catch (e) {} // opaque-origin frames forbid it
+  }
+  function writeHash() { // throttled: Safari throws after 100 replaceState calls in 30 s
+    if (pendingWrite) return;
+    const wait = 300 - (Date.now() - lastWrite);
+    if (wait <= 0) flushHash(); else pendingWrite = setTimeout(flushHash, wait);
+  }
+  addEventListener('pagehide', () => { if (pendingWrite) flushHash(); });
+  async function flush() {
+    if (!inited) return ready;
+    if (running) { dirty = true; return running; }
+    running = (async () => { do { dirty = false; sync(state); await render(state); } while (dirty); })();
+    try { await running; } finally {
+      running = null;
+      if (parent !== window) parent.postMessage({ figureHeight: Math.ceil(document.body.getBoundingClientRect().height) }, '*');
+    }
+  }
+  function set(patch) {
+    state = { ...state, ...patch };
+    if (named(state) >= 0) last = named(state);
+    writeHash();
+    return flush();
+  }
+  addEventListener('keydown', e => {
+    if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || (e.target.closest && e.target.closest('input, select, textarea'))) return;
+    if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+    const from = named(state) >= 0 ? named(state) : last;
+    set(STATES[names[Math.max(0, Math.min(names.length - 1, from + (e.key === 'ArrowRight' ? 1 : -1)))]]);
+  });
+  let width = innerWidth; // height-only changes (mobile toolbars) don't change the layout
+  addEventListener('resize', () => { if (innerWidth !== width) { width = innerWidth; flush(); } });
+  const ready = Promise.resolve().then(init).then(() => { inited = true; return flush(); });
+  return { states: STATES, get: () => ({ ...state }), set, ready, flushHash };
+})();
+window.figure = figure;
+</script>
+</body>
+</html>

@@ -37,8 +37,10 @@ That script:
 Available skills in [`skills`](skills):
 
 - [`/commit`](skills/commit) - create clean Conventional Commit messages
+- [`/figure-design`](skills/figure-design) - whiteboard-style design of conceptual figures: ASCII ideation, fast text-free drafts, live preview
 - [`/github`](skills/github) - interact with GitHub through the `gh` CLI
 - [`/github-issues`](skills/github-issues) - structured issue triage and implementation workflow using worktrees
+- [`/interactive-figures`](skills/interactive-figures) - single interactive scientific figures (D3/SVG or Mol* density maps) as one offline HTML file, with checks and stills; extends figure-design
 - [`/learning-mode`](skills/learning-mode) - structured AI-assisted learning workflow
 - [`/mermaid`](skills/mermaid) - create and validate Mermaid diagrams
 - [`/native-web-search`](skills/native-web-search) - fallback guidance for the `web_search` tool
