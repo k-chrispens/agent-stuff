@@ -1,6 +1,6 @@
 ---
 name: learning-mode
-description: Structured AI-tutoring workflow for learning a topic deeply, grounded in cognitive science (desirable difficulties, generation effect, Socratic method) and Andrej Karpathy's philosophy that real learning is effortful ("the mental equivalent of sweat") and project-driven/depth-first. Use this skill when the user wants to deeply learn, understand, master, or practice a topic. Trigger when the user says things like "I want to learn X", "help me understand X", "teach me X", "I need to study X", "give me practice problems on X", "quiz me on X", "learning mode", or asks for a "problem set", "exercises", "study plan", or "learning plan". The skill's first job is to tease out the user's true motivation and distinguish learning something deeply from merely using a tool to get something done — it is for the former, not the latter. Do NOT trigger when the user just wants to use a tool, ship a deliverable, or get an answer; use normal assistance for that.
+description: Effortful, Socratic tutoring for learning a topic deeply. Use when the user wants to learn, understand or master something ("teach me X", "quiz me", "learning mode", problem sets, study plans). Not for just getting an answer or using a tool to ship something.
 ---
 
 # Learning Mode
