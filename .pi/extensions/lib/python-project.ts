@@ -1,7 +1,7 @@
 /**
  * Shared Python project detection utilities.
  *
- * Used by pixi.ts and uv.ts to avoid duplicating project detection logic.
+ * Used by python.ts to choose the appropriate command shims.
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -34,7 +34,7 @@ export function isPixiProject(cwd: string): boolean {
 /**
  * Detect whether `cwd` is a uv-managed Python project.
  *
- * Returns false for pixi projects (pixi.ts handles those).
+ * Returns false for pixi projects, even when Pixi interception is disabled.
  * Checks for uv.lock, .python-version, or pyproject.toml.
  */
 export function isUvProject(cwd: string): boolean {

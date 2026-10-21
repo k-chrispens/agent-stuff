@@ -13,8 +13,16 @@ echo "Source: $SCRIPT_DIR"
 echo ""
 
 # ---------------------------------------------------------------------------
-# Helper: create a symlink, backing up any existing target
+# Helpers: keep backups outside all skill/extension discovery directories
 # ---------------------------------------------------------------------------
+backup() {
+    local dst="$1" backup_dir
+    mkdir -p "${XDG_STATE_HOME:-$HOME/.local/state}/agent-stuff/backups"
+    backup_dir="$(mktemp -d "${XDG_STATE_HOME:-$HOME/.local/state}/agent-stuff/backups/$(basename "$dst").XXXXXX")"
+    mv "$dst" "$backup_dir/"
+    echo "  backed up  $dst -> $backup_dir/"
+}
+
 link() {
     local src="$1" dst="$2"
 
@@ -28,8 +36,7 @@ link() {
         rm "$dst"
         echo "  relinked   $dst -> $src (was $current)"
     elif [ -e "$dst" ]; then
-        mv "$dst" "$dst.bak"
-        echo "  backed up  $dst -> $dst.bak"
+        backup "$dst"
     fi
 
     ln -s "$src" "$dst"
@@ -111,43 +118,45 @@ link "$SCRIPT_DIR/global/extensions" "$PI_AGENT_DIR/extensions"
 link "$SCRIPT_DIR/skills" "$PI_AGENT_DIR/skills"
 
 # ---------------------------------------------------------------------------
-# ~/.pi/agent/settings.json — merge extensions and remove deprecated pi-review-loop package
+# ~/.pi/agent/settings.json — use repo extensions, including directory entry points
 # ---------------------------------------------------------------------------
-# Auto-discover all .ts extensions in .pi/extensions/
-AGENT_STUFF_EXTENSIONS=()
-shopt -s nullglob
-for ext in "$SCRIPT_DIR/.pi/extensions/"*.ts; do
-    AGENT_STUFF_EXTENSIONS+=("$ext")
+# Shared Ponytail skills already come from the Claude marketplace symlinks.
+SHARED_PONYTAIL=true
+for name in ponytail ponytail-audit ponytail-debt ponytail-gain ponytail-help ponytail-review; do
+    if [ ! -f "$HOME/.agents/skills/$name/SKILL.md" ]; then
+        SHARED_PONYTAIL=false
+    fi
 done
-shopt -u nullglob
 
 if command -v jq &>/dev/null; then
     if [ ! -f "$PI_SETTINGS" ]; then
         echo '{}' > "$PI_SETTINGS"
     fi
 
-    ext_json="[]"
-    for ext in "${AGENT_STUFF_EXTENSIONS[@]}"; do
-        ext_json=$(echo "$ext_json" | jq --arg e "$ext" '. + [$e]')
-    done
+    # Replace old per-file entries, preserving extensions outside this repo.
+    merged=$(jq --arg repo "$SCRIPT_DIR/" --arg ext "$SCRIPT_DIR/.pi/extensions" \
+        '[(.extensions // [])[] | select(startswith($repo) | not)] + [$ext] | unique' "$PI_SETTINGS")
 
-    # Remove any existing extensions from this repo, then add current ones
-    existing=$(jq -r '.extensions // []' "$PI_SETTINGS")
-    merged=$(echo "$existing" | jq --arg repo "$SCRIPT_DIR" '[.[] | select(startswith($repo) | not)]' | jq --argjson new "$ext_json" '. + $new | unique')
-
-    jq --argjson exts "$merged" --arg zmx "$ZMX_PACKAGE" '
+    jq --argjson exts "$merged" --arg zmx "$ZMX_PACKAGE" --argjson shared_ponytail "$SHARED_PONYTAIL" '
         .extensions = $exts
         | .enableSkillCommands = true
-        | .packages = (((.packages // []) | map(select(
-            . != "npm:pi-review-loop"
-            and . != "pi-review-loop"
-            and ((type != "object") or ((.source // "") != "npm:pi-review-loop" and (.source // "") != "pi-review-loop"))
-        ))) as $pkgs
-        | if ($pkgs | any((type == "string" and . == $zmx) or (type == "object" and .source == $zmx))) then $pkgs else $pkgs + [$zmx] end)
+        | .packages = (
+            (.packages // []) | map(select(
+                . != "npm:pi-review-loop"
+                and . != "pi-review-loop"
+                and ((type != "object") or ((.source // "") != "npm:pi-review-loop" and (.source // "") != "pi-review-loop"))
+            )) | map(
+                if $shared_ponytail and ((if type == "string" then . else .source end) == "git:github.com/DietrichGebert/ponytail") then
+                    (if type == "string" then {source: .} else . end) | .skills = []
+                else . end
+            )
+            | if any((type == "string" and . == $zmx) or (type == "object" and .source == $zmx)) then . else . + [$zmx] end
+        )
     ' \
-        "$PI_SETTINGS" > "$PI_SETTINGS.tmp" && mv "$PI_SETTINGS.tmp" "$PI_SETTINGS"
+        "$PI_SETTINGS" > "$PI_SETTINGS.tmp"
+    mv "$PI_SETTINGS.tmp" "$PI_SETTINGS"
 
-    echo "  merged     $PI_SETTINGS ($(echo "$merged" | jq -r 'length') extensions, $ZMX_PACKAGE package)"
+    echo "  merged     $PI_SETTINGS ($(echo "$merged" | jq -r 'length') extension paths, $ZMX_PACKAGE package)"
 else
     echo "  WARNING    jq not found, skipping settings.json merge"
     echo "             install jq or manually add extensions to $PI_SETTINGS"
@@ -202,13 +211,8 @@ if command -v claude &>/dev/null || command -v amp &>/dev/null || [ -d "$CLAUDE_
             continue
         fi
         link "${skill_dir%/}" "$CLAUDE_SKILLS_DIR/$skill_name"
-        # Amp-specific: its loader picks up SKILL.md from *.bak directories,
-        # which would shadow our symlink. Only clean up .bak when Amp is
-        # installed, so Claude-only machines never silently delete a
-        # user-owned skill that happened to collide with a repo skill name.
-        if command -v amp &>/dev/null && [ -d "$CLAUDE_SKILLS_DIR/$skill_name.bak" ]; then
-            rm -rf "$CLAUDE_SKILLS_DIR/$skill_name.bak"
-            echo "  cleaned    $CLAUDE_SKILLS_DIR/$skill_name.bak"
+        if [ -e "$CLAUDE_SKILLS_DIR/$skill_name.bak" ] || [ -L "$CLAUDE_SKILLS_DIR/$skill_name.bak" ]; then
+            backup "$CLAUDE_SKILLS_DIR/$skill_name.bak"
         fi
     done
     shopt -u nullglob
@@ -222,7 +226,7 @@ if command -v claude &>/dev/null || command -v amp &>/dev/null || [ -d "$CLAUDE_
 fi
 
 # ---------------------------------------------------------------------------
-# Zed Agent: ~/.agents/skills/<name> -> repo skills/<name> (per skill)
+# Shared Agent Skills (Pi, Zed, etc.): ~/.agents/skills/<name> -> repo skills/<name>
 # ---------------------------------------------------------------------------
 ZED_SKILLS_DIR="$HOME/.agents/skills"
 mkdir -p "$ZED_SKILLS_DIR"
@@ -231,6 +235,9 @@ for skill_dir in "$SCRIPT_DIR/skills/"*/; do
     [ -f "$skill_dir/SKILL.md" ] || continue
     skill_name="$(basename "$skill_dir")"
     link "${skill_dir%/}" "$ZED_SKILLS_DIR/$skill_name"
+    if [ -e "$ZED_SKILLS_DIR/$skill_name.bak" ] || [ -L "$ZED_SKILLS_DIR/$skill_name.bak" ]; then
+        backup "$ZED_SKILLS_DIR/$skill_name.bak"
+    fi
 done
 shopt -u nullglob
 echo ""
@@ -238,7 +245,7 @@ echo ""
 # ---------------------------------------------------------------------------
 # Ensure shim scripts are executable
 # ---------------------------------------------------------------------------
-for dir in intercepted-commands pixi-intercepted-commands; do
+for dir in intercepted-commands pixi-intercepted-commands .pi/intercepted-commands .pi/pixi-intercepted-commands; do
     target="$SCRIPT_DIR/$dir"
     if [ -d "$target" ]; then
         shopt -s nullglob
@@ -291,7 +298,7 @@ done
 echo ""
 echo "Settings extensions:"
 if command -v jq &>/dev/null && [ -f "$PI_SETTINGS" ]; then
-    jq -r '.extensions[]? // empty' "$PI_SETTINGS" | while read -r f; do echo "  $(basename "$f")"; done
+    jq -r '.extensions[]? // empty' "$PI_SETTINGS" | while read -r f; do echo "  $(basename "${f#[-+]}")"; done
     echo ""
     echo "Settings packages:"
     jq -r '.packages[]? | if type == "string" then . else .source end' "$PI_SETTINGS" | while read -r p; do echo "  $p"; done

@@ -16,11 +16,14 @@ That script:
 
 - links `global/extensions/` into `~/.pi/agent/extensions`
 - links `skills/` into `~/.pi/agent/skills`
-- merges this repo's project-local extensions from `.pi/extensions/` into Pi settings
+- registers `.pi/extensions/` as a directory in Pi settings, including subdirectory extensions such as `pdf-reader`
 - installs npm dependencies for `.pi/extensions/`
 - removes the deprecated `npm:pi-review-loop` package entry so the bundled repo version is used instead
 - links `global/CLAUDE.md` into `~/.claude/CLAUDE.md` when Claude Code or Amp is installed
 - links individual skills into `~/.claude/skills/` when Claude Code or Amp is installed (each skill becomes a `/<name>` slash command in Claude Code)
+- links individual skills into `~/.agents/skills/` for Pi, Zed, and other Agent Skills clients (Pi deduplicates symlinks pointing to the same file)
+- keeps replaced files and legacy skill `.bak` directories under `${XDG_STATE_HOME:-~/.local/state}/agent-stuff/backups/`, outside skill discovery
+- disables the Ponytail Pi package's duplicate skills when all six are already available through `~/.agents/skills/`, retaining its extension and the shared skills
 - installs the `npm:@deevus/pi-zmx` Pi package so zmx tools are available
 
 ## Repository layout
@@ -55,7 +58,7 @@ Available skills in [`skills`](skills):
 This repo currently uses two extension locations:
 
 - [`global/extensions`](global/extensions) - repo-global extensions linked into `~/.pi/agent/extensions` by `./setup.sh`
-- [`.pi/extensions`](.pi/extensions) - project-local extensions and shared extension dependencies used when working inside this repo
+- [`.pi/extensions`](.pi/extensions) - extensions and shared dependencies auto-discovered inside this repo and registered globally by `./setup.sh`
 
 ### Global extensions
 
@@ -71,11 +74,10 @@ This repo currently uses two extension locations:
 - [`notify.ts`](.pi/extensions/notify.ts) - desktop/webhook notifications when the agent finishes
 - [`omp-lite.ts`](.pi/extensions/omp-lite.ts) - current-Pi-compatible thin wrappers inspired by oh-my-pi: domain-restricted `web_search`, zmx `subagent`, `hashline_read`/`hashline_edit`, simple `ast_edit`, and lightweight `lsp`
 - [`pdf-reader`](.pi/extensions/pdf-reader) - reads PDFs and extracts text plus embedded figures
-- [`pixi.ts`](.pi/extensions/pixi.ts) - Pixi-aware Python workflow helpers
+- [`python.ts`](.pi/extensions/python.ts) - one Python-aware `bash` override: Pixi projects take precedence over uv projects; `--no-pixi` and `--no-uv` disable interception independently
 - [`review.ts`](.pi/extensions/review.ts) - Codex-style code review command for branches, commits, PRs, folders, and custom instructions
 - [`session-breakdown.ts`](.pi/extensions/session-breakdown.ts) - interactive session usage and cost breakdown UI
 - [`todos.ts`](.pi/extensions/todos.ts) - file-backed todo manager with TUI helpers
-- [`uv.ts`](.pi/extensions/uv.ts) - uv-aware Python workflow helpers
 - [`vim.ts`](.pi/extensions/vim.ts) - Vim-style editing helpers for the Pi interface
 - [`whimsical.ts`](.pi/extensions/whimsical.ts) - replaces the default thinking message with whimsical status text
 
@@ -135,6 +137,22 @@ Available themes in [`pi-themes`](pi-themes):
 These command files need customization before use. They live in [`plumbing-commands`](plumbing-commands):
 
 - [`/make-release`](plumbing-commands/make-release.md) - repository release helper template
+
+## Checks
+
+The setup regression tests use temporary homes and stub out network/install commands:
+
+```bash
+node --test tests/setup.test.mjs
+```
+
+Test Python routing and reloads against the installed Pi SDK (no model calls):
+
+```bash
+PI_OFFLINE=1 PI_SDK_PATH=/path/to/pi-coding-agent/dist/index.js node --test tests/python-routing.test.mjs
+```
+
+`PI_SDK_PATH` can be omitted if `@earendil-works/pi-coding-agent` is available through normal Node module resolution.
 
 ## Notes
 
