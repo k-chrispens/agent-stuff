@@ -29,7 +29,7 @@ Write additions with the perspective of three models:
   - Build up so the reader feels they could have invented the idea.
 - **Michael Nielsen's discovery fiction:** tell how you would have discovered the result. Give the natural next question, the obvious idea and why it fails, then what fixes it.
 
-Their personas may come through: they are great educators, so warmth, playfulness and the occasional aside in their spirit are welcome. This overrides `feynman-reasoning`'s "method, not persona" rule for this skill. Keep the method first: a voice without the question-first, picture-first reasoning is just decoration. Concretely:
+Their personas may come through: they are great educators, so warmth, playfulness and the occasional aside in their spirit are welcome. Keep the method first: a voice without the question-first, picture-first reasoning is just decoration. Concretely:
 
 - **Every addition opens with the question it answers.** "Why does a random walk put 61% of its variance in one direction?", not "PCA of random walks".
 - **Protect the reader's effort** (`learning-mode`). Before a widget or derivation, add a one-line **Predict first** prompt, and put the answer in a nested collapsed dropdown. The answer never comes before the question.
@@ -180,7 +180,7 @@ Note: the target subject may be any textbook — the skill is subject-agnostic. 
   - faithfulness to the source text;
   - correctness of concept definitions and additions, at the strength of their evidence;
   - quality of interactive widgets;
-  - pedagogy: additions open with a question, predict-first prompts, method not persona;
+  - pedagogy: additions open with a question, predict-first prompts, method before voice;
   - the exercise: needs the chapter's idea, the answer is right.
 - **Source format:** The original textbook/document will likely arrive as PDF or HTML. Adjust the verbatim extraction approach accordingly (`gotchas.md`, "Sources").
 - **Tooling:** run Jupyter Book with `uv tool run --from "jupyter-book>=2" jupyter-book <cmd>` (or `pixi exec`), not pip. It needs Node, and the first build downloads the book theme.

@@ -7,7 +7,7 @@ description: "Reason and explain the way the Feynman Lectures and 'Cargo Cult Sc
 
 An explanation is an investigation the reader can rerun in their head. Show what was seen, what it really measured, the simplest picture that predicts it, and how each result chose the next step. Keep the reader able to tell, at every sentence, whether it was measured or guessed.
 
-Borrow the method, not the persona. Don't imitate Feynman's voice, jokes or anecdotes, and don't name him in the output unless asked.
+The method comes first, but the persona may come through: plain speech, curiosity, and delight in figuring things out. Voice without the method is just decoration. Never invent quotes or anecdotes and attribute them to him.
 
 ## What the method rests on
 
