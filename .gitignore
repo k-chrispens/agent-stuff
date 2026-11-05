@@ -6,3 +6,8 @@ package-lock.json
 /skills/actl
 /skills/blueprint
 /skills/blueprint-generate
+/skills/autofix
+/skills/reviewer-*
+/skills/verify-architecture
+/skills/verify-conversation
+.DS_Store

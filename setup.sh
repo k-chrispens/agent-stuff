@@ -100,7 +100,12 @@ fi
 # Symlink external skills into repo (gitignored, source of truth elsewhere)
 # ---------------------------------------------------------------------------
 EXTERNAL_SKILLS=("$HOME/.claude/skills/actl")
+# Claude Code plugin skills, shared with pi / Delta (Claude itself loads them via the plugin)
+shopt -s nullglob
+EXTERNAL_SKILLS+=("$HOME/.claude/plugins/marketplaces/imbue-code-guardian/plugins/imbue-code-guardian/skills/"*/)
+shopt -u nullglob
 for ext_skill in "${EXTERNAL_SKILLS[@]}"; do
+    ext_skill="${ext_skill%/}"
     [ -d "$ext_skill" ] || continue
     skill_name="$(basename "$ext_skill")"
     link "$ext_skill" "$SCRIPT_DIR/skills/$skill_name"
@@ -205,9 +210,9 @@ if command -v claude &>/dev/null || command -v amp &>/dev/null || [ -d "$CLAUDE_
     for skill_dir in "$SCRIPT_DIR/skills/"*/; do
         [ -f "$skill_dir/SKILL.md" ] || continue
         skill_name="$(basename "$skill_dir")"
-        # Skip skills that are already symlinked FROM ~/.claude/skills (external skills)
-        if [ -L "${skill_dir%/}" ] && readlink "${skill_dir%/}" | grep -q "^$HOME/.claude/skills/"; then
-            echo "  skip       $skill_name (external, already in ~/.claude/skills)"
+        # Skip skills that are already symlinked FROM ~/.claude (external skills and plugin skills)
+        if [ -L "${skill_dir%/}" ] && readlink "${skill_dir%/}" | grep -q "^$HOME/.claude/"; then
+            echo "  skip       $skill_name (external, already in ~/.claude)"
             continue
         fi
         link "${skill_dir%/}" "$CLAUDE_SKILLS_DIR/$skill_name"

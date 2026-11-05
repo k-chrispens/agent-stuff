@@ -73,3 +73,11 @@ Use Conventional Commits: `<type>(<scope>): <summary>`
 - Prefer pixi in projects with pixi.toml; prefer uv otherwise
 - Never use pip/pip3/conda directly
 - Run python via `pixi run python` or `uv run python`
+
+# imbue-code-guardian skills in Delta
+
+Skip this section in Claude Code and Codex. When running `autofix`, `verify-architecture`, `verify-conversation` or `reviewer-init-categories` in Delta:
+- `${CLAUDE_PLUGIN_ROOT}` is not set. Substitute `/Users/kyroyo/.claude/plugins/marketplaces/imbue-code-guardian/plugins/imbue-code-guardian` wherever it appears.
+- "Spawn a `<name>` Agent" means spawn a fresh Delta subagent whose instructions are the contents of `<plugin root>/agents/<name>.md` plus the inputs the skill lists, then wait for it to finish. Use the current model; ignore `haiku`, `opus` and `opus[1m]`. If you cannot spawn subagents, say the review cannot run; never review it yourself or write a pass marker.
+- Ignore `allowed-tools` frontmatter. `AskUserQuestion` means ask the user. `$ARGUMENTS` means the user's request.
+- `verify-conversation`: skip `export_transcript_paths.sh`, `filter_transcript.py` and `progress.jsonl` (they only read Claude Code and Codex logs). Instead tell the `review-conversation` subagent to read the transcript with `delta thread show "<thread id>"` (JSON; the `messages` field holds the conversation), passing it the value of `$DELTA_CURRENT_THREAD_ID`, and to review the whole thread. If that variable is empty, find the thread with `delta thread list --json` and confirm it with the user.
