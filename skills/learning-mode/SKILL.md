@@ -1,6 +1,6 @@
 ---
 name: learning-mode
-description: Effortful, Socratic tutoring for learning a topic deeply. Use when the user wants to learn, understand or master something ("teach me X", "quiz me", "learning mode", problem sets, study plans). Not for just getting an answer or using a tool to ship something.
+description: Effortful, Socratic tutoring for learning a topic deeply. Use when the user wants to learn, understand or master something ("teach me X", "tutor me", "quiz me", "drill me", "learning mode", problem sets, study plans). Not for just getting an answer or using a tool to ship something.
 ---
 
 # Learning Mode
@@ -13,6 +13,19 @@ This skill rests on two principles, both about not fooling yourself:
 So this is AI-as-**tutor**, not AI-as-**oracle**. Its entire job is to keep you honest about whether you actually understand, and to *protect* the effort rather than remove it.
 
 It is for **learning something deeply**. It is *not* for **using a tool to get something done**. Those are different goals, and the first job of the workflow is to figure out which one you're actually here for.
+
+## Built on socratic-tutor
+
+Read `socratic-tutor.md` in this skill's directory before starting. It is Jane Street's Socratic tutor, vendored unmodified, and it is the questioning engine here: its teaching loop, evaluation rules, skill map and user commands apply throughout Dialogue and Test and are not repeated in this file. Dialogue's student mode and Test's problems are the independent checks its evaluation rules ask for before a level goes up.
+
+This file adds what comes before and around the questioning: Triage, Struggle, student mode, problem sets, metacognitive review and tone. Where the two disagree, this file wins:
+
+- **Triage replaces its Guard.** The gate here asks why the learner is here, not only "quick answer or teach me?".
+- **The skill map grows on demand.** Do not break the whole topic into 4-10 subskills up front. Start the map with the subskills the first depth-first step needs, and add rows when the goal hits a wall.
+- **Its diagnostic comes after Triage and covers only the first step.** The diagnostic places the learner; it does not replace Struggle.
+- **Struggle comes before its teaching loop.** No questioning on a concept until the learner has brought back an attempt.
+- **Explain in the smallest piece that works.** When its loop reaches "explain directly", give a one-sentence hint first, then one step of the solution with the learner continuing from there. A fuller explanation comes only after sustained effort.
+- **The course ends on the Triage goal.** Run its final assessment when the self-explanation target is met and every subskill on the map is at target level.
 
 ## Overview
 
@@ -104,7 +117,7 @@ For the immediate goal, suggest 1–2 primary sources (textbook chapters, papers
 
 ### Transition
 
-Once — and only once — the learner says they're ready, briefly confirm the goal, the effort budget, and the first concrete step, then proceed to Struggle. If they're still unsure, stay in the conversation.
+Once — and only once — the learner says they're ready, briefly confirm the goal, the effort budget, and the first concrete step. Run socratic-tutor's diagnostic on that step's subskills, show the skill map, then proceed to Struggle. If they're still unsure, stay in the conversation.
 
 ---
 
@@ -157,13 +170,7 @@ Use them in sequence: Coach first (to resolve confusions), then Student (to veri
 
 #### Mode A: Coach (Resolve Confusions)
 
-The user brings specific confusion points from Struggle. Help them work through these using questions, hints, and guided reasoning — NOT direct explanations.
-
-**Prompt pattern (internal — do not show to user):**
-- When the user states a confusion, ask a question that directs their attention to the key insight they're missing
-- If they're stuck after 2–3 questions, offer a *small* hint — one step, not the whole answer
-- If still stuck after sustained effort, provide a "scaffolded reveal": explain one step, then immediately ask the user to continue from there
-- Never provide the full solution unless the user explicitly exits learning mode
+The user brings specific confusion points from Struggle. Work through them with socratic-tutor's teaching loop, starting from the learner's own confusion points rather than from questions of your choosing. Never provide the full solution unless the user explicitly exits learning mode.
 
 **Redirections for oracle-mode requests:**
 If the user asks "Just explain X to me" or "What's the answer?":
@@ -215,9 +222,8 @@ Generate problems calibrated to the learner's level and the specific concept. Be
 When the user brings back their solutions:
 
 1. **Ask them to explain their approach first** — don't just check the answer. "Walk me through your reasoning."
-2. **Probe reasoning before confirming correctness.** Ask about assumptions, edge cases, alternative approaches.
-3. **If the answer is wrong:** Do NOT immediately reveal the error. Ask questions that lead the user toward discovering it: "What happens when [edge case]?" or "Can you verify this step independently?"
-4. **If the answer is right:** Confirm, then push deeper: "Can you generalize this? What changes if [parameter varies]? Is there a more elegant approach?"
+2. **Check it under socratic-tutor's teaching loop and evaluation rules**, then update the skill map.
+3. **If the answer is right:** Confirm, then push deeper: "Can you generalize this? What changes if [parameter varies]? Is there a more elegant approach?"
 
 ### Metacognitive Review
 
@@ -242,7 +248,7 @@ After Test, decide next steps with the learner:
 
 - If mastery is solid → return to the goal and take the next depth-first step (back to Struggle), pulling in new concepts only as the goal now demands them
 - If gaps remain → return to Struggle or Dialogue for the same concept with harder material
-- If the learner wants a break → summarize what was covered, note where to pick up next time
+- If the learner wants a break → emit socratic-tutor's "save state" block, adding the goal, the effort budget and the next depth-first step
 
 ---
 
@@ -297,7 +303,6 @@ It is not a substitute for primary sources. AI explanations are secondhand. Text
 - Explain a concept before the learner has attempted it
 - Summarize a paper/chapter the learner hasn't read yet
 - Write code the learner should be writing
-- Confirm an answer without probing reasoning first
 - Front-load a full breadth-first curriculum
 - Open with a wall of text explaining the workflow, or stack several questions in one turn
 
@@ -307,16 +312,9 @@ It is not a substitute for primary sources. AI explanations are secondhand. Text
 - Let the learner set the effort dial; reduce time, not honesty, when motivation is low
 - Keep a concrete, depth-first goal as the spine; pull concepts in on demand
 - Ask what the learner has tried before helping
-- Respond to questions with questions (Socratic)
 - Ask the learner to explain their reasoning in their own words
 - Flag discrepancies between confidence and performance
 - Encourage return to primary sources when confusion is foundational
-
-**Escalation ladder when learner is stuck:**
-1. Ask a reframing question
-2. Offer a small directional hint (one sentence)
-3. Reveal one step of the solution, ask learner to continue
-4. (Only after sustained effort) Provide fuller explanation, then immediately re-engage with a probing question
 
 ---
 
