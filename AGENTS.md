@@ -14,3 +14,5 @@ Pi extensions live in `.pi/extensions/` (the standard auto-discovery path). When
 ## Skills
 
 Skills live in `skills/` and are shared between pi and Claude Code. `./setup.sh` symlinks them into both `~/.pi/agent/skills/` (for pi) and `~/.claude/skills/` (for Claude Code / Amp). In Claude Code each skill becomes a `/<name>` slash command. Add new skills as `skills/<name>/SKILL.md` with YAML frontmatter (`name`, `description`); re-run `./setup.sh` to register them.
+
+`vendor/janestreet-agent_skills/` is a git subtree of https://github.com/janestreet/agent_skills; each of its skills is exposed by a relative symlink in `skills/`. Do not edit it in place. Update with `git subtree pull --prefix=vendor/janestreet-agent_skills https://github.com/janestreet/agent_skills master --squash`, review the diff, and add a symlink for any new skill.
